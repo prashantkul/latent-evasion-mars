@@ -50,7 +50,8 @@ behaviors under a held-out judge.
 | M2 | Ablation: chat vs agentic, refusal rate + probe-firing rate → dissociation test | ◑ First data point (5 matched behaviors) | refusal preserved; probe firing 0.81→0.51 agentic. Needs scale + compliance cases |
 | M2b | Diagnose the agentic drop: calibration vs direction-rotation vs read-position | ✅ Done (22 Jul 2026) | direction transfers (agentic AUC 0.97–0.99 @ L14–26); mechanism 2 rejected, no retrain needed |
 | M2c | Multi-step execution (tool_choice=auto) + behaviour/representation dissociation | ✅ Done (22 Jul 2026) | **compliance 67%**; probe still fires on **16/20** complied cases → dissociation |
-| M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | |
+| M2d | Full public set (n=44), judge-graded harm, bootstrap 95% CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
+| M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | full run used gpt-4o judge; offline judge still open |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
 ## Results log
@@ -174,6 +175,35 @@ the agentic setting.
 **Caveats:** n=30, one weak 3B tool-user; compliance = "called the target tool" (attempted, not
 graded-successful harm); probe read at first-turn prompt (pre-action). Multi-turn probe reads
 (post-tool-result) and graded harm score still open.
+
+### M2d — full set, graded harm, bootstrap CIs (✅ 22 Jul 2026)
+
+44 distinct public harmful behaviors. Pass 1 first-turn probe (`tool_choice="none"`); Pass 2 full
+multi-step loop with AgentHarm's **real** `combined_scorer` (per-behavior grading functions + gpt-4o
+refusal judge). 2000× bootstrap over behaviors. Script `experiments/full_run_graded.py`; data
+`experiments/results/results_full.json`; plots `experiments/results/m3_overview.png`; logs
+`experiments/inspect_logs/logs_full/`.
+
+| Metric | Point | 95% CI |
+|--------|-------|--------|
+| refusal rate (judge) | 0.39 | [0.25, 0.52] |
+| harm score (graded) | 0.26 | [0.17, 0.35] |
+| probe fires (any behavior) | 0.84 | [0.73, 0.93] |
+| **P(fire \| did-not-refuse)** | **0.74** | **[0.57, 0.90]** |
+| P(fire & did-not-refuse) | 0.46 | [0.32, 0.59] |
+
+**2×2 (fire×refused):** fire&not-refused **20**, fire&refused 17, silent&not-refused 7, silent&refused **0**.
+Probe magnitude: mean L18 refused **+1.01** / not-refused **+0.32**; good-fire refused 1.00 / not-refused 0.70.
+
+- **Dissociation confirmed at scale, CI excludes 0.5:** on ~74% of non-refusals the refusal probe is
+  active — the model represents harm yet doesn't refuse.
+- **Refusal ⇒ fire (17/17):** whenever it refused, the probe always fired (silent&refused = 0). The
+  representation is necessary for the behaviour; it's just not sufficient (many fires without refusal).
+- **Harm score 0.26** (0.41 among non-refusals): the 3B *attempts* but rarely *completes* harmful
+  multi-step tasks — capability ceiling, exactly why refusal-rate and harm-score are reported apart.
+- **Category structure:** Copyright is the probe's blind spot (fire 0.33, never refuses) — Arditi
+  concept doesn't cover it. Disinformation/Drugs/Harassment/Sexual fire ~1.0. Cybercrime harm 0.03
+  (can't execute) yet fires 0.80.
 
 ## Open decisions
 - **Read position (M1):** last-prompt-token before first tool call is the closest analogue and is

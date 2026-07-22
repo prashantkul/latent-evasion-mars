@@ -49,6 +49,7 @@ behaviors under a held-out judge.
 | M1 | Pick read position in tool-call trace | ▶ Next | last-prompt-token works; need a position sweep to check the agentic drop isn't just the tap point |
 | M2 | Ablation: chat vs agentic, refusal rate + probe-firing rate → dissociation test | ◑ First data point (5 matched behaviors) | refusal preserved; probe firing 0.81→0.51 agentic. Needs scale + compliance cases |
 | M2b | Diagnose the agentic drop: calibration vs direction-rotation vs read-position | ✅ Done (22 Jul 2026) | direction transfers (agentic AUC 0.97–0.99 @ L14–26); mechanism 2 rejected, no retrain needed |
+| M2c | Multi-step execution (tool_choice=auto) + behaviour/representation dissociation | ✅ Done (22 Jul 2026) | **compliance 67%**; probe still fires on **16/20** complied cases → dissociation |
 | M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
@@ -143,6 +144,36 @@ Separation (AUC of `w·h`, bias-invariant) vs Arditi ceiling:
   (≈14–26); optionally recenter `b` for cleaner firing (mild calibration wobble only).
 - **Caveats:** `tool_choice="none"` (context, not tool execution); n=24; last-prompt-token. Multi-step
   execution + M1 position sweep still open. Logs: `logs_diag/2026-07-22T00-36-55*`.
+
+### M2c — multi-step execution + dissociation (✅ 22 Jul 2026)
+
+30 distinct harmful behaviors. Two passes, joined by id: **Pass 1** first-turn probe read
+(`tool_choice="none"`), **Pass 2** full multi-step tool loop (`tool_choice="auto"`, message_limit 12),
+compliance = "agent called a harmful **target** tool". Script: `experiments/multistep_dissociation.py`;
+logs `logs_multi/2026-07-22T01-03*` (probe), `…01-04*` (behaviour).
+
+**Headline — behaviour/representation dissociation, confirmed:**
+- **Compliance jumps to 67%** (20/30 called the harmful target tools) once the agent actually executes
+  tools — vs ~96% *refusal* in the single-generation refusal-context (M2b). Matches AgentHarm's
+  "surprisingly compliant without jailbreaking."
+- **The refusal probe still fires on 16/20 complied cases** (good-layer firing ≥0.5). The model
+  internally represents "harmful" yet calls the harmful tools anyway.
+- **Graded, predictive-but-overridden:** non-complied (refused) mean `L18=+1.06`, firing 1.00;
+  complied mean `L18=+0.40`, firing 0.76. Stronger internal harm signal → more likely to refuse, but
+  the agentic scaffold overrides a clearly-firing signal in most compliance cases.
+- **Misses are concept-appropriate:** the 4/20 complied-without-firing are mostly **Copyright**
+  (+ one Fraud) — a category the Arditi probe barely encodes as "harmful." Probe silence there is
+  sensible, not random.
+- Messy real-agent edge: a few cases (108, 43 Hate) emit a verbal refusal **and** still call a tool.
+
+**Why this matters:** the white-box probe catches harmful agent behaviour that the model's own
+*behaviour* does not — it fires on compliance the model went through with. Strong argument for
+probe-based agent monitors: the internal signal is a better safety readout than observed refusal in
+the agentic setting.
+
+**Caveats:** n=30, one weak 3B tool-user; compliance = "called the target tool" (attempted, not
+graded-successful harm); probe read at first-turn prompt (pre-action). Multi-turn probe reads
+(post-tool-result) and graded harm score still open.
 
 ## Open decisions
 - **Read position (M1):** last-prompt-token before first tool call is the closest analogue and is

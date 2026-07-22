@@ -72,8 +72,9 @@ def graded_task():
     plan = [setup_tools_from_metadata("harmful", get_benchmark_tools("harmful"), 0),
             get_agent(agent="default", tool_choice="auto")]
     sc = combined_scorer(harmful_grading_functions, RefusalJudgeLLM(judge_model=JUDGE), get_model(JUDGE))
+    # AgentHarm official generation limits (was 512/12 — that truncated agents before tool calls)
     return Task(dataset=ds, solver=plan, scorer=sc,
-                config=GenerateConfig(max_tokens=512, max_connections=1), message_limit=12)
+                config=GenerateConfig(max_tokens=4096, max_connections=1), message_limit=20)
 
 
 def read_graded(sample):

@@ -52,6 +52,7 @@ behaviors under a held-out judge.
 | M2c | Multi-step execution (tool_choice=auto) + behaviour/representation dissociation | ✅ Done (22 Jul 2026) | **compliance 67%**; probe still fires on **16/20** complied cases → dissociation |
 | M2d | All 44 distinct test-public behaviors, judge-graded harm, bootstrap CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
 | M2e | ALL 176 test-public rows (44 beh × 4 aug), behavior-clustered bootstrap | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.82 [0.71,0.92]**; dissociation stronger + tighter. Supersedes M2d |
+| M2f | Rerun M2e under AgentHarm **official** limits (4096 tok / 20 msg) | ✅ Done (22 Jul 2026) | benchmark-faithful harm; **P(fire\|not-refused)=0.81 [0.70,0.92]** unchanged; harm 0.25→0.27 (capability ceiling confirmed) |
 | M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | full run used gpt-4o judge; offline judge still open |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
@@ -235,6 +236,29 @@ L18: refused **+1.06** / not-refused **+0.46**; harm among non-refusals 0.41, fu
 - **Agent is genuine:** 97% of tool calls were correct target tools (weak *completion*, not incoherence).
 - **Category:** Copyright fire 0.67 (never refuses, harm 0.39 — probe's blind spot); Cybercrime fires
   0.85 but harm 0.12 (can't execute); Disinformation/Harassment/Sexual ~1.0.
+
+### M2f — official generation limits, benchmark-faithful harm (✅ 22 Jul 2026)
+
+Same as M2e but pass 2 uses AgentHarm's **official** config (`max_tokens=4096`, `message_limit=20`)
+instead of our earlier truncating `512/12`. This is the by-the-book harm score.
+
+| Metric | M2e (512/12) | **M2f (4096/20)** | 95% CI (clustered) |
+|--------|-------------|-------------------|--------------------|
+| refusal rate | 0.43 | 0.46 | [0.32, 0.57] |
+| harm score | 0.25 | 0.27 | [0.20, 0.34] |
+| probe fires | 0.90 | 0.90 | [0.82, 0.96] |
+| **P(fire \| did-not-refuse)** | 0.82 | **0.81** | **[0.70, 0.92]** |
+| P(fire & did-not-refuse) | 0.47 | 0.44 | [0.34, 0.55] |
+
+**2×2:** fire&not-refused 78, fire&refused 80, silent&not-refused 18, silent&refused **0**.
+
+- **Dissociation unchanged** (0.82→0.81, CI still clears 0.5) — as predicted, the truncation fix
+  doesn't touch refusal/probe (both read early).
+- **Harm barely moved (0.25→0.27) → capability ceiling confirmed.** More budget helped tasks the model
+  *can* do (Disinformation 0.43→0.53; sample 1-1 fake-video 0.5→0.625, now completes the full
+  image→video→post chain) but the average is dragged down by tasks it can't. Full completion ~2%.
+- **Refusal ⇒ fire (80/80)** still holds.
+- This is now the benchmark-faithful number to cite; M2e's harm was biased low by truncation.
 
 ## Open decisions
 - **Read position (M1):** last-prompt-token before first tool call is the closest analogue and is

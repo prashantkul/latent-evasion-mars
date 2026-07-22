@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve, roc_auc_score
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-d = json.load(open(os.path.join(HERE, "results_full.json")))
+d = json.load(open(os.path.join(HERE, "..", "01-dissociation", "results_full.json")))
 R = d["records"]
 harm = np.array([r["harm"] for r in R])              # judge harm score (0..1)
 refused = np.array([r["refused"] for r in R]).astype(int)

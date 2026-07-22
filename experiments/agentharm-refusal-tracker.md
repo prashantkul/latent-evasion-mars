@@ -53,6 +53,7 @@ behaviors under a held-out judge.
 | M2d | All 44 distinct test-public behaviors, judge-graded harm, bootstrap CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
 | M2e | ALL 176 test-public rows (44 beh × 4 aug), behavior-clustered bootstrap | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.82 [0.71,0.92]**; dissociation stronger + tighter. Supersedes M2d |
 | M2f | Rerun M2e under AgentHarm **official** limits (4096 tok / 20 msg) | ✅ Done (22 Jul 2026) | benchmark-faithful harm; **P(fire\|not-refused)=0.81 [0.70,0.92]** unchanged; harm 0.25→0.27 (capability ceiling confirmed) |
+| M5 | Better probe metric (AUC of score→label) + agentic-native probe (val→test) | ✅ Done (22 Jul 2026) | probe→refusal AUC 0.89; agentic-native (64 val) ≈ transferred; mean-diff > SVM |
 | M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | full run used gpt-4o judge; offline judge still open |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
@@ -259,6 +260,34 @@ instead of our earlier truncating `512/12`. This is the by-the-book harm score.
   image→video→post chain) but the average is dragged down by tasks it can't. Full completion ~2%.
 - **Refusal ⇒ fire (80/80)** still holds.
 - This is now the benchmark-faithful number to cite; M2e's harm was biased low by truncation.
+
+### M5 — better probe metric + agentic-native probe (✅ 22 Jul 2026)
+
+Replaced the ad-hoc "firing fraction ≥ 0.5" with a **continuous score → label** framing:
+average `w·h+b` per prompt, then **AUC(score → refusal)** (threshold-free, magnitude-aware, clustered CI).
+Scripts `experiments/{probe_metrics,agentic_probe,roc_plot,judge_roc}.py`; plots in `results/`.
+
+**Probe-as-predictor (Arditi probe, on test_public):**
+- **AUC(probe score → refusal) = 0.89** (mean-good 0.887, best single layer 11 = 0.898; all layers ~0.89).
+- AUC(probe score → harm≥0.5) = 0.27, Spearman −0.61 — probe *anti*-predicts harm (via refusal).
+- Reconciles the dissociation: refusals score highest, but non-refusals overlap into positive scores
+  (fire) → high ranking-AUC *and* firing-on-compliance are both true.
+
+**Judge consistency check:** AUC(judge harm score → compliance) = 0.89; only 6/80 refusals had harm≥0.5.
+
+**Agentic-native probe** (trained on the 64-sample AgentHarm **val** split, harmful+benign; tested on the
+176-row test_public, disjoint behaviors), AUC(→refusal):
+
+| Layer | SVM | mean-diff |
+|-------|-----|-----------|
+| 14 | 0.862 [0.78,0.93] | **0.887** |
+| 18 | 0.791 | 0.874 |
+| 22 | 0.803 | 0.871 |
+| 26 | 0.850 | 0.850 |
+
+- **Mean-difference > SVM** at N=64 (SVM overfits; centroid direction is robust).
+- **Agentic-native ≈ transferred** (0.887 vs Arditi's 0.89) → the refusal direction is largely
+  distribution-invariant; training in-distribution doesn't beat the transfer.
 
 ## Open decisions
 - **Read position (M1):** last-prompt-token before first tool call is the closest analogue and is

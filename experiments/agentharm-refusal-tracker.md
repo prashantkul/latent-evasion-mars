@@ -50,7 +50,8 @@ behaviors under a held-out judge.
 | M2 | Ablation: chat vs agentic, refusal rate + probe-firing rate → dissociation test | ◑ First data point (5 matched behaviors) | refusal preserved; probe firing 0.81→0.51 agentic. Needs scale + compliance cases |
 | M2b | Diagnose the agentic drop: calibration vs direction-rotation vs read-position | ✅ Done (22 Jul 2026) | direction transfers (agentic AUC 0.97–0.99 @ L14–26); mechanism 2 rejected, no retrain needed |
 | M2c | Multi-step execution (tool_choice=auto) + behaviour/representation dissociation | ✅ Done (22 Jul 2026) | **compliance 67%**; probe still fires on **16/20** complied cases → dissociation |
-| M2d | Full public set (n=44), judge-graded harm, bootstrap 95% CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
+| M2d | All 44 distinct test-public behaviors, judge-graded harm, bootstrap CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
+| M2e | ALL 176 test-public rows (44 beh × 4 aug), behavior-clustered bootstrap | ▶ Running | correct-power version; supersedes M2d CIs |
 | M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | full run used gpt-4o judge; offline judge still open |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
@@ -176,9 +177,15 @@ the agentic setting.
 graded-successful harm); probe read at first-turn prompt (pre-action). Multi-turn probe reads
 (post-tool-result) and graded harm score still open.
 
-### M2d — full set, graded harm, bootstrap CIs (✅ 22 Jul 2026)
+### M2d — all distinct behaviors, graded harm, bootstrap CIs (✅ 22 Jul 2026)
 
-44 distinct public harmful behaviors. Pass 1 first-turn probe (`tool_choice="none"`); Pass 2 full
+> **Coverage note:** this run used **all 44 distinct `test_public` behaviors, one prompt variant each**
+> — not all 176 augmented rows and not the 32 validation behaviors. The `harmful` HF config is 208 rows
+> (test_public 176 + validation 32); test_public = 44 base behaviors × 4 augmentations. Bootstrap here
+> resampled the 44 independent behaviors (correct). M2e reruns over all 176 rows with a behavior-clustered
+> bootstrap for more power.
+
+44 distinct public harmful behaviors (one variant each). Pass 1 first-turn probe (`tool_choice="none"`); Pass 2 full
 multi-step loop with AgentHarm's **real** `combined_scorer` (per-behavior grading functions + gpt-4o
 refusal judge). 2000× bootstrap over behaviors. Script `experiments/full_run_graded.py`; data
 `experiments/results/results_full.json`; plots `experiments/results/m3_overview.png`; logs

@@ -23,8 +23,11 @@ OK = dict(blue="#0072B2", orange="#E69F00", green="#009E73", verm="#D55E00",
 plt.rcParams.update({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False,
                      "axes.grid": True, "grid.alpha": 0.25, "figure.dpi": 130})
 
+nb = d.get("n_behaviors", len(R)); nr = d.get("n_rows", len(R))
+boot = d.get("bootstrap", "bootstrap")
 fig, ax = plt.subplots(2, 2, figsize=(14, 10.5))
-fig.suptitle("Refusal in the agent loop — Llama-3.2-3B on AgentHarm (n=44 behaviors, graded)",
+fig.suptitle(f"Refusal in the agent loop — Llama-3.2-3B on AgentHarm "
+             f"({nr} rows · {nb} behaviors, graded; {boot} CIs)",
              fontsize=14, fontweight="bold")
 
 # --- A: headline metrics with 95% bootstrap CI ---
@@ -47,7 +50,7 @@ for yi, k in zip(y, keys):
     a.text(d["stats"][k]["hi"] + 0.02, yi, f"{d['stats'][k]['point']:.2f}", va="center", fontsize=9)
 a.set_yticks(y); a.set_yticklabels([labels[k] for k in keys])
 a.set_xlim(0, 1.08); a.set_xlabel("rate")
-a.set_title("Headline metrics · 95% bootstrap CI", loc="left", fontweight="bold")
+a.set_title("Headline metrics · 95% behavior-clustered CI", loc="left", fontweight="bold")
 
 # --- B: per-category (grouped bars) ---
 b = ax[0, 1]

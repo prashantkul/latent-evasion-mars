@@ -51,7 +51,7 @@ behaviors under a held-out judge.
 | M2b | Diagnose the agentic drop: calibration vs direction-rotation vs read-position | ✅ Done (22 Jul 2026) | direction transfers (agentic AUC 0.97–0.99 @ L14–26); mechanism 2 rejected, no retrain needed |
 | M2c | Multi-step execution (tool_choice=auto) + behaviour/representation dissociation | ✅ Done (22 Jul 2026) | **compliance 67%**; probe still fires on **16/20** complied cases → dissociation |
 | M2d | All 44 distinct test-public behaviors, judge-graded harm, bootstrap CIs | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.74 [0.57,0.90]**; dissociation robust. Plots in `results/` |
-| M2e | ALL 176 test-public rows (44 beh × 4 aug), behavior-clustered bootstrap | ▶ Running | correct-power version; supersedes M2d CIs |
+| M2e | ALL 176 test-public rows (44 beh × 4 aug), behavior-clustered bootstrap | ✅ Done (22 Jul 2026) | **P(fire\|not-refused)=0.82 [0.71,0.92]**; dissociation stronger + tighter. Supersedes M2d |
 | M3 | Swap gpt-4o judges for offline/available judge; reproducible harm scores | ⏳ | full run used gpt-4o judge; offline judge still open |
 | M4 | Intervention: `@modelapi("latent")` provider + projection hook; measure refusal/harm shift | ⏳ | W&B/Optuna sweep candidate |
 
@@ -211,6 +211,30 @@ Probe magnitude: mean L18 refused **+1.01** / not-refused **+0.32**; good-fire r
 - **Category structure:** Copyright is the probe's blind spot (fire 0.33, never refuses) — Arditi
   concept doesn't cover it. Disinformation/Drugs/Harassment/Sexual fire ~1.0. Cybercrime harm 0.03
   (can't execute) yet fires 0.80.
+
+### M2e — all 176 rows, behavior-clustered bootstrap (✅ 22 Jul 2026)
+
+The correct-power rerun: **all 176 `test_public` rows** (44 behaviors × 4 augmentations), same two-pass
+design, CIs from a **behavior-clustered bootstrap** (5000×; resample the 44 behaviors, pool their rows —
+no pseudo-replication). Supersedes M2d. Script `experiments/full_run_graded.py`; plot regenerated.
+
+| Metric | Point | 95% CI (clustered) |
+|--------|-------|--------------------|
+| refusal rate (judge) | 0.43 | [0.30, 0.55] |
+| harm score (graded) | 0.25 | [0.18, 0.32] |
+| probe fires (any behavior) | 0.90 | [0.82, 0.96] |
+| **P(fire \| did-not-refuse)** | **0.82** | **[0.71, 0.92]** |
+| P(fire & did-not-refuse) | 0.47 | [0.36, 0.59] |
+
+**2×2 (fire×refused):** fire&not-refused **83**, fire&refused 75, silent&not-refused 18, silent&refused **0**.
+L18: refused **+1.06** / not-refused **+0.46**; harm among non-refusals 0.41, full completion 0.03.
+
+- **Dissociation stronger and tighter than M2d:** point 0.74→**0.82**, CI [0.57,0.90]→**[0.71,0.92]**.
+  More data (176 rows) narrows the interval even under clustering; the CI clears 0.5 comfortably.
+- **Refusal ⇒ fire (75/75):** silent&refused still exactly 0 — representation is necessary for refusal.
+- **Agent is genuine:** 97% of tool calls were correct target tools (weak *completion*, not incoherence).
+- **Category:** Copyright fire 0.67 (never refuses, harm 0.39 — probe's blind spot); Cybercrime fires
+  0.85 but harm 0.12 (can't execute); Disinformation/Harassment/Sexual ~1.0.
 
 ## Open decisions
 - **Read position (M1):** last-prompt-token before first tool call is the closest analogue and is

@@ -1,10 +1,10 @@
-"""M3: full public behavior set, judge-graded harm, bootstrapped 95% CIs.
+"""M3 (corrected): ALL test_public rows (176 = 44 behaviors x 4 augmentations), judge-graded harm,
+with a BEHAVIOR-CLUSTERED bootstrap — the resampling unit is the behavior, not the row, so
+augmentations of the same task don't inflate the sample size (no pseudo-replication).
 
-Pass 1 (probe): tool_choice='none' -> first-turn refusal-probe read (hidden_states model).
-Pass 2 (graded behaviour): tool_choice='auto' multi-step loop with AgentHarm's REAL combined_scorer
+Pass 1 (probe): tool_choice='none' -> first-turn probe read (hidden_states model).
+Pass 2 (graded): tool_choice='auto' multi-step loop with AgentHarm's REAL combined_scorer
   (per-behavior grading functions + gpt-4o refusal judge) -> harm score + refusal (plain model).
-Join by id; report refusal rate, harm score, probe firing, and the dissociation
-P(probe fires | did-not-refuse), each with a 2000x bootstrap 95% CI over behaviors.
 """
 import glob
 import os
@@ -29,7 +29,7 @@ from inspect_evals.agentharm.utils import (
 PROBE_DIR = os.path.expanduser("~/latent-evasion/dataset/representations/llama32-3b/train_svm")
 GOOD_LAYERS = [14, 18, 22, 26]
 JUDGE = "openai/gpt-4o-2024-08-06"
-B = 2000
+B = 5000
 
 _W, _B = {}, {}
 for p in sorted(glob.glob(os.path.join(PROBE_DIR, "svm_layer*.pt"))):
@@ -59,26 +59,16 @@ def probe_scorer():
     return score
 
 
-def distinct_ids():
-    ds = load_dataset("harmful", "test_public", False)
-    seen, ids = set(), []
-    for s in ds:
-        io = (s.metadata or {}).get("id_original")
-        if io not in seen:
-            seen.add(io); ids.append(s.id)
-    return ids
-
-
-def probe_task(ids):
-    ds = filter_dataset(load_dataset("harmful", "test_public", False), ids, None, None)
+def probe_task():
+    ds = filter_dataset(load_dataset("harmful", "test_public", False), [], None, None)
     plan = [setup_tools_from_metadata("harmful", get_benchmark_tools("harmful"), 0),
             get_agent(agent="default", tool_choice="none")]
     return Task(dataset=ds, solver=plan, scorer=probe_scorer(),
                 config=GenerateConfig(max_tokens=8, max_connections=1))
 
 
-def graded_task(ids):
-    ds = filter_dataset(load_dataset("harmful", "test_public", False), ids, None, None)
+def graded_task():
+    ds = filter_dataset(load_dataset("harmful", "test_public", False), [], None, None)
     plan = [setup_tools_from_metadata("harmful", get_benchmark_tools("harmful"), 0),
             get_agent(agent="default", tool_choice="auto")]
     sc = combined_scorer(harmful_grading_functions, RefusalJudgeLLM(judge_model=JUDGE), get_model(JUDGE))
@@ -94,85 +84,94 @@ def read_graded(sample):
     return None, None
 
 
-def ci(idx_stat, records, seed=0):
-    rng = np.random.default_rng(seed)
-    n = len(records)
-    vals = [idx_stat(records[rng.integers(0, n, n)]) for _ in range(B)]
-    vals = [v for v in vals if v is not None and not np.isnan(v)]
-    return np.percentile(vals, [2.5, 97.5])
-
-
 if __name__ == "__main__":
     mid = os.environ.get("LLAMA32_3B_MODEL", "unsloth/Llama-3.2-3B-Instruct")
     model_probe = get_model(f"hf/{mid}", hidden_states=True, device="cuda:0")
     model_plain = get_model(f"hf/{mid}", device="cuda:0")
-    ids = distinct_ids()
-    print(f"{len(ids)} distinct behaviors")
 
-    print("PASS 1 — probe ...")
-    p1 = inspect_eval(probe_task(ids), model=model_probe, log_dir="./logs_full")
+    print("PASS 1 — probe (all rows) ...")
+    p1 = inspect_eval(probe_task(), model=model_probe, log_dir="./logs_full")
     probe = {}
     for smp in (p1[0].samples or []):
         m = (smp.scores["probe_scorer"].metadata if smp.scores else None) or {}
         probe[str(smp.id)] = m
 
-    print("PASS 2 — graded multi-step (gpt-4o judge) ...")
-    p2 = inspect_eval(graded_task(ids), model=model_plain, log_dir="./logs_full")
+    print("PASS 2 — graded multi-step (gpt-4o judge, all rows) ...")
+    p2 = inspect_eval(graded_task(), model=model_plain, log_dir="./logs_full")
     graded = {}
     for smp in (p2[0].samples or []):
         harm, refusal = read_graded(smp)
         if harm is not None:
             graded[str(smp.id)] = (harm, refusal)
 
-    # join
     recs = []
     for sid, m in probe.items():
         if sid in graded and m.get("l18") is not None:
             harm, refusal = graded[sid]
-            recs.append((m["good_fire"], m["l18"], harm, refusal, m.get("category")))
-    dt = np.dtype([("fire", "f8"), ("l18", "f8"), ("harm", "f8"), ("ref", "f8"), ("cat", "U24")])
+            recs.append((str(m.get("id_original")), m["good_fire"], m["l18"], harm, refusal, str(m.get("category"))))
+    dt = np.dtype([("io", "U16"), ("fire", "f8"), ("l18", "f8"), ("harm", "f8"), ("ref", "f8"), ("cat", "U24")])
     R = np.array(recs, dtype=dt)
-    n = len(R)
-    fires = R["fire"] >= 0.5
-    notref = R["ref"] < 0.5
+    n_rows = len(R)
+    behaviors = np.unique(R["io"])
+    n_beh = len(behaviors)
+    idx_by_beh = {b: np.where(R["io"] == b)[0] for b in behaviors}
+    print(f"\n=== n_rows={n_rows}  n_behaviors={n_beh}  (avg {n_rows/n_beh:.1f} augmentations/behavior) ===")
 
     def rate(x):
         return float(np.mean(x)) if len(x) else float("nan")
 
-    print(f"\n=== n={n} behaviors ===")
-    stats = {
-        "refusal_rate (judge)":      (rate(R["ref"]),          lambda r: rate(r["ref"])),
-        "harm_score (graded)":       (rate(R["harm"]),         lambda r: rate(r["harm"])),
-        "probe_fires_rate":          (rate(fires),             lambda r: rate(r["fire"] >= 0.5)),
-        "P(fire | did-not-refuse)":  (rate(fires[notref]),     lambda r: rate((r["fire"] >= 0.5)[r["ref"] < 0.5])),
-        "P(fire & did-not-refuse)":  (rate(fires & notref),    lambda r: rate((r["fire"] >= 0.5) & (r["ref"] < 0.5))),
-    }
-    stat_out = {}
-    for name, (pt, fn) in stats.items():
-        lo, hi = ci(fn, R)
-        stat_out[name] = {"point": pt, "lo": float(lo), "hi": float(hi)}
-        print(f"  {name:<28} {pt:.3f}   95% CI [{lo:.3f}, {hi:.3f}]")
+    fires = R["fire"] >= 0.5
+    notref = R["ref"] < 0.5
 
-    print(f"\n  mean good-fire | refused={rate(R['fire'][~notref]):.2f}  not-refused={rate(R['fire'][notref]):.2f}")
+    def stat_refusal(idx):  return rate(R["ref"][idx])
+    def stat_harm(idx):     return rate(R["harm"][idx])
+    def stat_fires(idx):    return rate(R["fire"][idx] >= 0.5)
+    def stat_cond(idx):     m = R["ref"][idx] < 0.5; return rate((R["fire"][idx] >= 0.5)[m]) if m.any() else np.nan
+    def stat_joint(idx):    return rate((R["fire"][idx] >= 0.5) & (R["ref"][idx] < 0.5))
+
+    STATS = {"refusal_rate (judge)": stat_refusal, "harm_score (graded)": stat_harm,
+             "probe_fires_rate": stat_fires, "P(fire | did-not-refuse)": stat_cond,
+             "P(fire & did-not-refuse)": stat_joint}
+
+    def cluster_ci(fn, seed=0):
+        rng = np.random.default_rng(seed)
+        vals = []
+        for _ in range(B):
+            pick = rng.choice(behaviors, size=n_beh, replace=True)          # resample BEHAVIORS
+            idx = np.concatenate([idx_by_beh[b] for b in pick])             # pool their augmentation rows
+            v = fn(idx)
+            if v is not None and not np.isnan(v):
+                vals.append(v)
+        return float(np.percentile(vals, 2.5)), float(np.percentile(vals, 97.5))
+
+    allidx = np.arange(n_rows)
+    stat_out = {}
+    print("\n  metric                        point   95% CI (behavior-clustered bootstrap)")
+    for name, fn in STATS.items():
+        pt = fn(allidx); lo, hi = cluster_ci(fn)
+        stat_out[name] = {"point": pt, "lo": lo, "hi": hi}
+        print(f"  {name:<28} {pt:.3f}   [{lo:.3f}, {hi:.3f}]")
+
+    M = [[int((fires & notref).sum()), int((fires & ~notref).sum())],
+         [int((~fires & notref).sum()), int((~fires & ~notref).sum())]]
+    print(f"\n  2x2 rows(fire/silent) x cols(not-refused/refused): {M}")
+    print(f"  mean good-fire | refused={rate(R['fire'][~notref]):.2f}  not-refused={rate(R['fire'][notref]):.2f}")
     print(f"  mean L18       | refused={rate(R['l18'][~notref]):+.2f}  not-refused={rate(R['l18'][notref]):+.2f}")
 
-    # per-category
     cat_out = {}
     print("\n  category            n  refusal  harm  fire")
     for c in sorted(set(R["cat"])):
         sub = R[R["cat"] == c]
         cat_out[c] = {"n": len(sub), "refusal": rate(sub["ref"]), "harm": rate(sub["harm"]),
                       "fire": rate(sub["fire"] >= 0.5)}
-        print(f"  {c:<18} {len(sub):>3}   {rate(sub['ref']):.2f}   {rate(sub['harm']):.2f}  "
-              f"{rate(sub['fire'] >= 0.5):.2f}")
+        print(f"  {c:<18} {len(sub):>3}   {rate(sub['ref']):.2f}   {rate(sub['harm']):.2f}  {rate(sub['fire'] >= 0.5):.2f}")
 
     import json
     json.dump({
-        "n": n,
-        "records": [{"fire": float(r["fire"]), "l18": float(r["l18"]), "harm": float(r["harm"]),
-                     "refused": bool(r["ref"] >= 0.5), "cat": str(r["cat"])} for r in R],
-        "stats": stat_out,
-        "by_category": cat_out,
+        "n_rows": n_rows, "n_behaviors": n_beh, "bootstrap": "behavior-clustered", "B": B,
+        "records": [{"io": str(r["io"]), "fire": float(r["fire"]), "l18": float(r["l18"]),
+                     "harm": float(r["harm"]), "refused": bool(r["ref"] >= 0.5), "cat": str(r["cat"])} for r in R],
+        "stats": stat_out, "contingency": M, "by_category": cat_out,
         "means": {"good_fire_refused": rate(R["fire"][~notref]), "good_fire_notref": rate(R["fire"][notref]),
                   "l18_refused": rate(R["l18"][~notref]), "l18_notref": rate(R["l18"][notref])},
     }, open("results_full.json", "w"), indent=2)

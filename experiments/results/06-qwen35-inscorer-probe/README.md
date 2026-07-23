@@ -1,11 +1,58 @@
-# 06 — Qwen3.5-27B with the SVC running inside the Inspect scorer
+# 06 — Qwen3.5-27B probe, trained and evaluated inside the Inspect scorer
 
-Closes the gap that forced the Qwen3.5 workaround. Previously Inspect's HF provider could not parse
-Qwen3.5's tool calls, so agentic behaviour had to come from a vLLM run and activations from a
-separate `get_representations` pass, joined by sample id (see `05-qwen35-agentic-dissociation`). With
-the parser fixed, the hf provider drives Qwen3.5 in-process, `hidden_states` reach the scorer, and the
-probe fires **inside** the eval — so the `.eval` log carries the probe score instead of a side-channel
-JSON.
+Closes the gap that forced the Qwen3.5 workaround, and produces the **valid** in-context probe result
+that replaces the invalid `05`. Previously Inspect's HF provider could not parse Qwen3.5's tool calls,
+so agentic behaviour had to come from a vLLM run and activations from a separate `get_representations`
+pass (no system prompt) — the context defect that invalidated `05`. With the parser fixed, the hf
+provider drives Qwen3.5 in-process, `hidden_states` reach the scorer, and the probe is both trained
+and evaluated on activations read in the **real agent prompt**.
+
+## ✅ Valid result — `qwen35_inscorer_experiment.py`
+Two Inspect passes in one process. **Pass A** (val, throwaway scoring): the scorer harvests val
+activations read in-scorer; the probe is trained on them afterward. **Pass B** (test): the trained
+probe *is* the scorer — it fires `w·h + b` live on each held-out test row, so the `.eval` log's Score
+column is the probe firing. Train on the 64 val rows only; test activations are scored, never fit on.
+Behavioural labels (refused) from the graded vLLM run, joined by sample id.
+
+**AUC(probe → refusal), Qwen3.5-27B, real agentic context, held-out test (176 harmful, refusal 0.585):**
+
+| selection | mean-difference | LinearSVC |
+|---|---|---|
+| **mean-over-layers (selection-free)** | **0.912** | 0.771 |
+| val-CV-selected layer (L18) | 0.785 [0.679, 0.873] | 0.744 |
+| test-argmax layer (L63, optimistic) | 0.924 [0.865, 0.970] | 0.916 |
+| best AUC(harmful vs benign) | 0.943 (L24) | 0.948 (L28) |
+
+**Read the mean-over-layers row as the headline** — it needs no layer selection, so it has no leakage.
+The probe is a **strong agentic monitor in the real context: AUC 0.912** predicting the refusal
+decision, **0.943** separating harmful from benign.
+
+**Finding — val-CV layer selection is unreliable at N=64.** With 64 val samples, many layers perfectly
+separate harmful/benign (CV AUC 1.000), so the argmax (L18) is essentially arbitrary and picks a layer
+that generalises poorly (test 0.785). The selection-free mean-over-layers (0.912) is the robust move;
+don't trust a single val-CV-picked layer at this sample size. (Best layer also moved from L54 offline
+to the very late layers in-context — the system prompt shifts where the refusal decision is readable.)
+
+### Three-way comparison — why context matters (AUC mean-diff → refusal)
+| experiment | context (train → eval) | AUC | status |
+|---|---|---|---|
+| `05` | offline → offline | 0.959 | **invalid** (inflated by same wrong-context train+test) |
+| `06` transfer | offline → in-scorer | 0.877 | mismatch (offline probe applied to real context) |
+| **`06` valid** | **in-scorer → in-scorer** | **0.912** (mean-layers) / 0.924 (test-argmax) | **honest** |
+
+The offline `05` number (0.959) was optimistic: training and testing in the same clean offline context
+inflates it. In the real agent context the honest figure is **0.912** — still a strong monitor, just
+not 0.96. mean-diff again beats the SVC on the selection-free mean (0.912 vs 0.771); they tie on the
+best single layer.
+
+Artifacts: `qwen35_inscorer_experiment.json` (per-layer AUCs, val-CV curve),
+`qwen35_inscorer_experiment_scores.npz` (per-sample per-layer scores + trained weights),
+`qwen35_inscorer_val_acts.npz` (the val training activations, in-scorer), `inspect_logs_experiment/`
+(Pass A harvest logs + Pass B logs whose Score column is the probe firing).
+
+---
+
+## Parser fix (the enabler)
 
 ## The bug (two parts)
 `inspect_ai/model/_providers/util/hf_handler.py`:

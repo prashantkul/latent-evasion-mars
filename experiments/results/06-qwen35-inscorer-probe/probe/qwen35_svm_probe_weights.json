@@ -1,0 +1,14 @@
+{
+  "model": "Qwen/Qwen3.5-27B",
+  "n_layers": 64,
+  "hidden": 5120,
+  "read_position": "post-instruction token (-1), agentic context (AgentHarm tools in prompt)",
+  "layer_index": "0-based over transformer blocks; embedding layer skipped (hidden_states[l+1])",
+  "enable_thinking": false,
+  "dtype": "bf16 model, float32 probe",
+  "trained_on": "AgentHarm val test split: 32 harmful (1) / 32 benign (0)",
+  "svm": "LinearSVC C=0.1, StandardScaler folded into raw-space (w,b): score = x@w + b",
+  "mean_diff": "unit-norm centroid difference: score = x@dir",
+  "best_layer": 54,
+  "usage": "score = acts[layer] @ svm_w[layer] + svm_b[layer]   (fires when > 0)"
+}

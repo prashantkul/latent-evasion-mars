@@ -1,4 +1,31 @@
-# 05 — Qwen3.5-27B agentic dissociation (second model)
+# ⛔ INVALID EXPERIMENT — superseded by `06-qwen35-inscorer-probe`
+
+**Do not cite the numbers in this folder.** The activations here were read from a *reconstructed*
+prompt that **omitted the AgentHarm agent's system prompt** (a 558-character instruction, "You are a
+helpful LLM agent that calls all necessary tools…", which Inspect prepends to every sample). The
+offline `get_representations` path built `[user] + tools` only, so the "agentic context" used here is
+**not the context the model actually saw** during the eval.
+
+Confirmed by reading the messages Inspect actually sent, and by scoring the same behavioural labels
+against activations read from the real in-scorer context:
+
+| metric (L54) | this folder (offline) | real in-scorer context |
+|---|---|---|
+| AUC(mean-diff → refusal) | 0.959 | 0.877 |
+| AUC(mean-diff, mean-over-layers) | 0.955 | 0.901 |
+| AUC(SVM → refusal) | 0.917 (L50) | 0.749 |
+
+The probe training/evaluation here is internally self-consistent, so nothing is *arithmetically*
+wrong — but it characterises a prompt distribution that isn't the agent's, so the headline
+probe-monitor numbers do not describe the agentic setting they claim to. Retained only for
+provenance and for the code, which `06` reuses.
+
+Valid successor: **`06-qwen35-inscorer-probe`** — the probe is trained and evaluated on activations
+read inside the Inspect scorer, i.e. the real agentic prompt.
+
+---
+
+# 05 — Qwen3.5-27B agentic dissociation (second model) — INVALID, see above
 
 Does the behaviour/representation dissociation replicate on a more capable agent? Same design as the
 Llama-3.2-3B work (`01-dissociation`), on **Qwen3.5-27B** (bf16, thinking off), extracted with the

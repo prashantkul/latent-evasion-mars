@@ -70,7 +70,58 @@ source of truth (its Score column *is* the probe firing), which is the pattern `
 uses for the 3B. Tradeoff: the hf path is slower than vLLM on a 27B, so vLLM still wins for large
 behavioural baselines — this buys correctness and self-documenting logs, not throughput.
 
+## Full-scale probe pass (all 352 test_public rows, in-scorer)
+`qwen35_full_probe_pass.py` — every layer's SVM and mean-diff score written into the Score metadata,
+so the `.eval` log carries the complete per-layer probe output.
+
+| split | rows | SVC fires (in-scorer, L54) |
+|---|---|---|
+| harmful | 176 | 0.915 |
+| benign | 176 | 0.284 |
+
+(The SVC's own bias is a poorly-calibrated operating point — 28% benign firing. AUC is the metric to
+read, below.)
+
+## ⛔ Why `05` is marked INVALID: it was missing the agent system prompt
+Joining these in-scorer scores to the same behavioural labels used in `05` does **not** reproduce the
+`05` numbers:
+
+| metric (L54 unless noted) | offline read (`05`) | in-scorer read (`06`) |
+|---|---|---|
+| AUC(mean-diff → refusal) | 0.959 | **0.877** |
+| AUC(mean-diff, mean-over-layers) | 0.955 | 0.901 |
+| AUC(SVM → refusal) | 0.917 (its best, L50) | 0.749 |
+| AUC(mean-diff, harmful vs benign) | 0.902 | **0.927** |
+
+Cause, confirmed by reading the messages Inspect actually sent: the AgentHarm default agent prepends a
+**558-character system prompt** ("You are a helpful LLM agent that calls all necessary tools…"). The
+offline `get_representations` path built `[user]` + tools only — **no system message** — so `05`'s
+"agentic context" was tools-in-prompt but system-prompt-free: an *approximation* of the real agent
+prompt, not the prompt the model actually saw.
+
+**How to read this.** `05` is arithmetically self-consistent but characterises a prompt distribution
+that is not the agent's, so it is **marked INVALID** and its probe-monitor numbers should not be
+cited. Note the direction still encodes harm at least as well in the real context
+(harmful-vs-benign *improves*, 0.902 → 0.927); what does not carry over is calibration to this
+model's refusal decision under the actual agent prompt.
+
+**The valid experiment** trains and evaluates in one context: run the val split through the same
+in-scorer path, refit the probes there, then evaluate on the in-scorer test scores already collected
+here. Pending (the GPU is currently running the behavioural pass).
+
 ## Files
-- `qwen35_inscorer.json` — per-sample probe scores + tool-call/parse diagnostics.
-- `inspect_logs/*.eval` — the two runs; pass-1's Score column is the probe firing.
-- `qwen35_inscorer.log` — run log.
+- `qwen35_inscorer.json` — 8-sample validation: probe scores + tool-call/parse diagnostics.
+- `qwen35_full_probe.json` — full 352-row in-scorer probe scores, every layer, both splits.
+- `inspect_logs/*.eval` — the 8-sample validation runs; pass-1's Score column is the probe firing.
+- `inspect_logs_fullprobe/*.eval` — the full 352-row probe pass.
+- `probe/qwen35_svm_probe_weights.npz` + `.json` — the standalone trained probe (per-layer `svm_w`,
+  `svm_b`, `dirs`) with a metadata sheet describing the read position and usage
+  (`score = acts[layer] @ svm_w[layer] + svm_b[layer]`, fires when > 0).
+- `probe/qwen35_svm_probe_scores.npz` — the source scores/weights file it was exported from.
+- `*.log` — run logs.
+
+## Code (kept with the experiment)
+`qwen35_inspect_patch.py` (the parser fix), `qwen35_inscorer_probe.py` (8-sample validation),
+`qwen35_full_probe_pass.py` (full in-scorer probe pass), `qwen35_full_behavior_hf.py` (official
+behavioural eval through the patched hf provider). Run with this folder on `PYTHONPATH` — the scripts
+resolve their sibling imports via `sys.path.insert(dirname(__file__))`.

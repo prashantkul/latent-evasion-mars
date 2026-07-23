@@ -10,7 +10,8 @@ from models.qwen2 import (
 )   
 from models.qwen35 import (
     Qwen35_9b,
-) 
+    Qwen35_27b,
+)
 from models.mistralRR import (
     Mistral7B_RR,
 )   
@@ -61,6 +62,7 @@ __all__ = [
     "Llama3_8b",
     "Qwen2_32b",
     "Qwen35_9b",
+    "Qwen35_27b",
     "Mistral7B_RR",
     "Gemma3_12b",
     "Llama32_3b",

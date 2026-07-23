@@ -6,12 +6,15 @@ from contextlib import contextmanager
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 class LanguageModel(ABC):
-    def __init__(self, model_name: str, system_prompt=None, device='cuda', quantization_config=None):
+    def __init__(self, model_name: str, system_prompt=None, device='cuda', quantization_config=None,
+                 torch_dtype=None):
         print(f"[Model] Initializing {model_name} on {device}...")
         self.model_name = model_name
         self.device = device
         self.system_prompt = system_prompt
         self.quantization_config = quantization_config
+        # Optional dtype override for the unquantized path (None keeps the float16 default).
+        self.torch_dtype = torch_dtype
         
         # Load Model & Tokenizer using the robust V2 logic
         self.model = None
@@ -39,12 +42,18 @@ class LanguageModel(ABC):
                     bnb_config = BitsAndBytesConfig(load_in_8bit=True)
             
             # Load Model
+            if bnb_config is not None:
+                dtype = None                       # bitsandbytes manages compute dtype
+            elif self.torch_dtype is not None:
+                dtype = self.torch_dtype           # explicit override (e.g. bf16 checkpoints)
+            else:
+                dtype = torch.float16              # unchanged default
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
                 token=token,
                 quantization_config=bnb_config,
                 device_map=self.device,
-                torch_dtype=torch.float16 if bnb_config is None else None,
+                torch_dtype=dtype,
                 trust_remote_code=True
             )
             self.model.eval()
@@ -82,7 +91,7 @@ class LanguageModel(ABC):
         return [self._get_prompt(prompt) for prompt in prompts]
 
     def prepare_inputs(self, prompt: str, **kwargs):
-        formatted_prompt = self._get_prompt(prompt=prompt)
+        formatted_prompt = self._get_prompt(prompt=prompt, **kwargs)
         return self.tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
 
     def prepare_batch_inputs(self, prompts: list[str], **kwargs):

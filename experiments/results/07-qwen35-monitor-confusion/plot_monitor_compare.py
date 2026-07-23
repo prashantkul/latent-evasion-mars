@@ -13,8 +13,19 @@ from matplotlib.patches import Rectangle
 from sklearn.metrics import roc_curve
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-d = json.load(open(os.path.join(HERE, "qwen35_monitor_confusion.json")))
+# Primary result is the majority-vote batch judge; fall back to the single-shot json.
+_batch = os.path.join(HERE, "qwen35_monitor_batch.json")
+d = json.load(open(_batch if os.path.exists(_batch) else os.path.join(HERE, "qwen35_monitor_confusion.json")))
 J, P = d["judge"], d["probe"]
+# The batch json stores probe metrics but not the raw scores needed for the ROC panel — load them
+# from the 06 in-context probe scores so the figure is self-sufficient either way.
+if "score_best" not in P:
+    z = np.load(os.path.join(HERE, "..", "06-qwen35-inscorer-probe",
+                             "qwen35_inscorer_experiment_scores.npz"), allow_pickle=True)
+    Xp = np.concatenate([z["md_h"], z["md_b"]]); yp = np.concatenate([np.ones(len(z["md_h"])), np.zeros(len(z["md_b"]))])
+    P = {**P, "score_best": Xp[:, P["best_hb_layer"]].tolist(), "true": yp.astype(int).tolist(),
+         "recall": P["recall"], "fpr": P["fpr"]}
+_maj = d.get("n_votes")
 OK = dict(blue="#0072B2", orange="#E69F00", red="#D7263D", grey="#B0B0B0", black="#111111")
 plt.rcParams.update({"font.size": 11, "axes.spines.top": False, "axes.spines.right": False,
                      "figure.dpi": 130})
@@ -38,7 +49,7 @@ def cm(a, c, title, sub):
     a.add_patch(Rectangle((0.5, -0.5), 1, 1, fill=False, edgecolor=OK["red"], lw=2.5))
 
 
-cm(ax[0], J, "gpt-4o judge  J(resp, prompt)",
+cm(ax[0], J, f"gpt-4o judge  J(resp, prompt){f'  (maj {_maj})' if _maj else ''}",
    f"acc {J['accuracy']:.2f} · recall {J['recall']:.2f} · FPR {J['fpr']:.2f}")
 cm(ax[1], P, "in-context probe (mean-diff) @ val threshold",
    f"acc {P['accuracy']:.2f} · recall {P['recall']:.2f} · FPR {P['fpr']:.2f}")

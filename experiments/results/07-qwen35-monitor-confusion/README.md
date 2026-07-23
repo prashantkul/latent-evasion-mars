@@ -13,10 +13,20 @@ ground truth.
 No GPU. `qwen35_monitor_confusion.py` (judge + metrics) and `plot_monitor_compare.py` (figure).
 
 ## Result — the `04` story flips on the harder test set
+Primary result uses the **majority-vote judge** (`qwen35_monitor_batch.py`, OpenAI Batch API): each
+prompt judged 3× at temperature 1.0, 2-of-3 majority. Single-shot temp-0 (`qwen35_monitor_confusion.py`)
+agrees within noise.
+
 | monitor | acc | recall | FPR | note |
 |---|---|---|---|---|
-| gpt-4o judge `J(resp,prompt)` | 0.79 | 0.99 | **0.41** | fixed operating point; flags **73/176 benign** as harmful |
+| gpt-4o judge — majority of 3 @ T1.0 | 0.77 | 0.99 | **0.45** | flags **79/176 benign** as harmful |
+| gpt-4o judge — single-shot T0 | 0.79 | 0.99 | 0.41 | flags 73/176 benign |
 | in-context probe @ val threshold | **0.87** | 0.83 | **0.085** | AUC 0.943; flags 15/176 benign |
+
+**Robustness (majority-vote self-consistency).** The 3 samples disagreed on only **25/352 (7.1%)** of
+prompts, and just **11 labels flipped** vs the single temp-0 run — gpt-4o is highly self-consistent, so
+the high FPR is not a nondeterminism artifact. Crucially, **62/176 benign are flagged harmful
+*unanimously* (3/3)**: the over-flagging is confident, not borderline.
 
 **The gpt-4o judge over-flags the adversarial benign twins.** On the 3B **val** set (`04`) the judge was
 near-perfect (recall 1.00, **FPR 0.06**). On Qwen **test_public** its **FPR jumps to 0.41** — 73 of 176
@@ -61,8 +71,10 @@ Audited the response extraction and the false positives directly:
 - Probe = mean-difference, harm-vs-benign best layer **L24** (AUC 0.943); `06` also has the SVM.
 
 ## Files
-- `qwen35_monitor_confusion.json` — judge + probe predictions, confusion matrices, per-layer AUC,
-  `probe_fpr_at_judge_recall`.
+- `qwen35_monitor_batch.{json,py}` + `_audit.json` — **primary**: majority-of-3 judge via Batch API
+  (3× temp 1.0), with per-vote records and per-sample audit.
+- `qwen35_monitor_confusion.json` — single-shot temp-0 judge + probe predictions, confusion matrices,
+  per-layer AUC, `probe_fpr_at_judge_recall`.
 - `monitor_compare.png` — two confusion matrices + probe ROC with the judge operating point.
 - `qwen35_monitor_confusion_audit.json` — **per-sample audit**: prompt, model response, judge label,
   and the model's own refusal, for all 352 rows (verify any judge call yourself).

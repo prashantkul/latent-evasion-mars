@@ -1,2 +1,3 @@
 # large regenerable GPU intermediate (val activations); scores/plots/logs are kept
 qwen35_agentic_val_acts.npz
+qwen35_test_acts.npz

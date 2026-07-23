@@ -57,12 +57,41 @@ Re-scored every layer on the test set (`qwen35_perlayer_test.py` → `_perlayer_
 - Aside: harmful-vs-benign *content* separation peaks earlier (L36, AUC 0.922) than the refusal
   *decision* (L54) — the decision is read best in late layers.
 
+### Probe type: mean-difference vs LinearSVC
+Both probes are fit per layer on the same 64 val agentic activations and evaluated on the same
+held-out test rows (`qwen35_svm_probe.py`). The SVC is standardized before fitting — Qwen's late-layer
+residual stream has massive-magnitude outlier dims that make an unscaled LinearSVC overflow; the
+scaler is folded back into a raw-space `(w, b)` so the probe stays a single linear direction.
+
+| probe | best AUC→refusal | mean-over-layers | best AUC(harmful vs benign) |
+|---|---|---|---|
+| **mean-difference** | **0.959** (L54) | **0.955** | 0.922 (L36) |
+| LinearSVC (C=0.1, scaled) | 0.917 (L50) | 0.849 | 0.941 (L20) |
+
+**Reading.** The mean-difference direction **beats the SVC** on refusal prediction (0.959 vs 0.917) and
+is far more stable when averaged across layers (0.955 vs 0.849) — the SVC's per-layer decision
+functions have differing scales/biases, so a raw mean over them degrades, whereas unit-norm mean-diff
+projections average cleanly. This reproduces the 3B finding that **mean-difference wins at small N**
+(64 training samples in 5120 dims is a regime where the low-variance centroid estimator beats a
+margin fit). The SVC does edge ahead on the objective it was directly trained for — harmful-vs-benign
+separation at its best layer (0.941 vs 0.922) — it just transfers less well to predicting the refusal
+*decision*.
+
 ## Figures
 - `probe_monitor.png` (`plot_monitor.py`): left — per-layer val-CV AUC(harmful vs benign), best L54,
   ≥0.99 plateau L45–63; right — held-out test ROC for probe→refusal (0.959) and harmful-vs-benign
   (0.902), val-threshold operating point (recall 0.78 · FPR 0.08).
 - `probe_roc_layers.png` (`roc_layers_plot.py`): ROC fan — all 64 layers (faint), best layer 54 (red,
   0.959), mean over layers (black, 0.955). Matches the 03 figure.
+- `probe_svm_vs_md.png` (`plot_svm_vs_md.py`): mean-difference vs LinearSVC — left, per-layer
+  AUC→refusal for both; right, test ROC at each probe's best layer (solid) and its mean-over-layers
+  ensemble (dotted).
+
+## Note on activations
+`qwen35_test_acts.npz` (462 MB, raw test activations `h_acts`/`b_acts` = 176×64×5120 each) and
+`qwen35_agentic_val_acts.npz` (96 MB, val) are kept on disk but **gitignored**. They exist so any
+future probe variant can be fit/evaluated without another GPU pass — the SVC run above needed them
+and had to re-extract because only projected scores had been saved previously.
 
 ## Reproduce (GPU box)
 ```

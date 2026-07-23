@@ -64,6 +64,7 @@ async def judge_all(rows, conc):
         async with sem:
             out = await jm.generate(input=jp, config=GenerateConfig(max_tokens=3, temperature=0.0))
         txt = (out.completion or "").strip()
+        r["judge_input"] = jp                     # capture EXACTLY what the judge saw (auditability)
         r["judge_raw"] = txt
         r["judge"] = 1 if txt[:1] == "1" else 0
         # a judge that declines/rambles instead of answering 0/1 would be silently scored 0 —
@@ -163,7 +164,13 @@ def main():
                      "score_best": Xp[:, best_hb].tolist(), "score_mean": mean_score.tolist(),
                      "true": yp.astype(int).tolist()}}
     json.dump(out, open(args.out, "w"), indent=2)
-    print(f"\nsaved {args.out}")
+    # audit sidecar: exactly what the judge saw + what the model did, per sample
+    audit = [{"id": r["id"], "gt": r["gt"], "category": r["category"],
+              "judge_pred": r["judge"], "judge_raw": r["judge_raw"],
+              "empty_response": r["empty_response"],
+              "prompt": r["prompt"][:1200], "response": r["response"][:1200]} for r in rows]
+    json.dump(audit, open(args.out.replace(".json", "_audit.json"), "w"), indent=2)
+    print(f"\nsaved {args.out} (+ _audit.json)")
     # honest comparison — the two sit at different operating points; neither strictly dominates
     print("\n=== MONITOR COMPARISON (Qwen3.5-27B, test_public 176+176) ===")
     print(f"  judge (gpt-4o)    acc {jconf['accuracy']:.3f}  recall {jconf['recall']:.3f}  FPR {jconf['fpr']:.3f}  (fixed point)")

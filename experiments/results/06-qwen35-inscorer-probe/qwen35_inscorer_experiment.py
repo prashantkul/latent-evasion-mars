@@ -100,8 +100,14 @@ def probe_scorer(tag):
         # Cache the raw in-context activation, not just this probe's scores: re-evaluating a
         # NEW probe then costs a CPU matmul instead of another agentic GPU run.
         TEST_ACTS[tag].append((str(state.sample_id), h))
-        return Score(value=float(svm[bl] > 0),                  # real: best-layer SVC firing
-                     metadata={"svm_best": float(svm[bl]), "md_best": float(md[bl]),
+        # The Score column is the ENSEMBLE, not a selected layer: a probe artifact is 64
+        # independent per-layer (w, b) pairs, and 38 of them tie at val CV AUC 1.000, so
+        # picking one is a lottery (test AUC 0.9215 for the val-CV pick vs 0.9561 for the
+        # mean). This matches the pinned metric in BASELINES.md. Best-layer stays in the
+        # metadata -- reported, never used to rank probes.
+        return Score(value=float(svm.mean() > 0),               # mean-over-layers, fires > 0
+                     metadata={"svm_mean": float(svm.mean()), "md_mean": float(md.mean()),
+                               "svm_best": float(svm[bl]), "md_best": float(md[bl]),
                                "best_layer": int(bl), "id_original": io})
     return score
 

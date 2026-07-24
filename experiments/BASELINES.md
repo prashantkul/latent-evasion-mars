@@ -36,6 +36,28 @@ folder for history only.
   calibration (see the SVM caveat below).
 - `auc_probe_to_refusal_harmful` — does the probe predict the model's own refusal, on harmful only.
 
+**The combining rule is the unweighted mean of raw per-layer scores**, and the Inspect scorer emits
+the same thing (`svm.mean() > 0`) rather than a selected layer. A probe artifact is a stack of L
+independent `(w, b)` pairs, so "the probe fires" needs a rule; picking one layer is the lottery
+described above. Alternatives measured on held-out test (`experiments/ensemble_rules.py`):
+
+| rule | AUC h-v-b | acc | recall | FPR | AUC→refusal |
+|---|---|---|---|---|---|
+| **raw mean** | **0.9561** | 0.892 | 0.886 | 0.102 | 0.7708 |
+| z-scored mean (val stats) | 0.9561 | 0.892 | 0.886 | 0.102 | 0.7811 |
+| median | 0.9486 | 0.875 | 0.875 | 0.125 | 0.8263 |
+| vote fraction | 0.9441 | 0.881 | 0.875 | 0.114 | 0.6388 |
+| best layer L18 | 0.9215 | 0.841 | 0.818 | 0.136 | 0.7442 |
+
+The raw mean wins on the primary objective and needs no val-derived calibration — `> 0` is already
+the canonical boundary. Scale-domination is not a concern for this probe: per-layer score std spans
+only 2× (the StandardScaler fold already normalised), the mean correlates at most r=0.946 with any
+single layer, and dropping the 10 loudest layers moves AUC 0.9561 → 0.9536. It is a real ensemble.
+
+*Open:* the median is better at predicting refusal (+0.055, paired cluster bootstrap 95% CI
+[+0.002, +0.118]). The interval excludes zero but only just, on one run — suggestive, not settled,
+and not a reason to move the pinned rule yet.
+
 ---
 
 ## Llama-3.2-3B-Instruct — `unsloth/Llama-3.2-3B-Instruct`

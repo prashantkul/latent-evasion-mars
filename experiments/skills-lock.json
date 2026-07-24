@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "companion-clis": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/companion-clis/SKILL.md",
+      "computedHash": "6ca988f935d0271812f6af36c1c0e0551f8cd0680298cf9baaae1b82081298c9"
+    },
+    "flash": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/flash/SKILL.md",
+      "computedHash": "85448857fd33fa4deab89bbe641f0aad22e203024bf8a49f215dbc0c57c6d465"
+    },
+    "runpod": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod/SKILL.md",
+      "computedHash": "6e4f824221db27fb9d63393de4318ab7927d68f73a56d8f472c414498fa93cf0"
+    },
+    "runpod-mcp": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-mcp/SKILL.md",
+      "computedHash": "37aa548f399012e7017945b437151841f3b825003549025718b171d984d0dcdb"
+    },
+    "runpod-usage": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpod-usage/SKILL.md",
+      "computedHash": "5b9ba293a07e707be3cbc0c3db15aa80a084cdb14c20103ec86e5d672d186008"
+    },
+    "runpodctl": {
+      "source": "runpod/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/runpod/skills/runpodctl/SKILL.md",
+      "computedHash": "d1dacadf388a216027c2709cb77cfaf4d1bf2efeda68cdb7b0f8ca1d9cdef61c"
+    }
+  }
+}

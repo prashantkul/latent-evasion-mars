@@ -16,6 +16,11 @@ share the exact same distribution.
 Train ONLY on the 64 val rows. Test activations are scored, NEVER fit on. Behavioural labels
 (refused) come from the graded vLLM run, joined by sample id, for AUC(probe -> refusal).
 
+Pass A writes the trained probe in canonical form (experiments/probe_io.py). A later run can
+REUSE it with `--probe-in <stem>` and skip Pass A entirely — the val split is a fixed 64 rows
+and the fit is deterministic, so re-harvesting it buys nothing but GPU time. Reuse is checked,
+not assumed: the model id, read position, layer indexing and layer coverage must all match.
+
   export HF_HOME=/workspace/.cache/huggingface PYTHONPATH=/opt/latent-evasion-mars
   python3 experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py \
       --harmful-log '/opt/latent-evasion-mars/logs_qwen35v_harmful/*.eval' \
@@ -82,7 +87,12 @@ def probe_scorer(tag):
         if hs is None:
             return Score(value=0.0, metadata={"error": "no hidden_states"})
         h = read_all_layers(hs)                                  # (L, H)
+        if h.shape != W["svm_w"].shape:                          # backstop for a reused probe
+            raise RuntimeError(f"activation/probe shape mismatch: h {h.shape} vs probe "
+                               f"{W['svm_w'].shape} — --probe-in does not match this model")
         svm = (h * W["svm_w"]).sum(-1) + W["svm_b"]              # (L,)
+        # Bare projection, no bias: this is the layout eval_probe.py expects for `md_h`/`md_b`
+        # and compensates for. The canonical single_direction artifact does carry its bias.
         md = (h * W["dirs"]).sum(-1)                             # (L,)
         bl = W["best_layer"]
         io = str((state.metadata or {}).get("id_original"))
@@ -133,12 +143,12 @@ def train_probe(X, y):
     return svm_w, svm_b, dirs, cv
 
 
-def save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, model_name):
+def save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, model_name, cv=None, best=None):
     """Write both probes in the schema eval_probe.py / CLE consume (experiments/probe_io.py)."""
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     from probe_io import save_probe
 
-    meta = {"model": model_name, "hidden": int(Xval.shape[2]),
+    meta = {"model": model_name, "hidden": int(Xval.shape[2]), "n_val": len(yval),
             "read_position": "post-instruction token (-1), in-context: read inside the Inspect "
                              "scorer from the model's real agentic context (AgentHarm agent "
                              "system prompt + tools)",
@@ -147,8 +157,12 @@ def save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, model_name):
             "trained_on": f"AgentHarm val split, {int(yval.sum())} harmful / {int((yval == 0).sum())} benign, in-context",
             "enable_thinking": False, "dtype": "bf16 model, float32 probe",
             "provenance": "qwen35_inscorer_experiment.py Pass A"}
+    # The CV curve belongs to the SVM fit alone, so it is recorded only on that sidecar --
+    # which is also where `--probe-in` reads the best layer back from on a reuse run.
+    sel = {} if cv is None else {"val_cv_by_layer": np.asarray(cv).tolist(),
+                                 "val_cv_best_layer": int(best if best is not None else np.argmax(cv))}
     save_probe(f"{stem}_svm", svm_w, svm_b,
-               {**meta, "probe_type": "svm",
+               {**meta, **sel, "probe_type": "svm",
                 "fit": "LinearSVC C=0.1, StandardScaler folded into raw-space (w, b)"})
     # Mean-difference carries no bias at fit time; the canonical form derives the midpoint
     # boundary so the artifact is self-contained.
@@ -158,6 +172,49 @@ def save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, model_name):
     save_probe(f"{stem}_single_direction", dirs, sd_b,
                {**meta, "probe_type": "single_direction",
                 "fit": "unit-norm centroid difference; bias = midpoint between val centroids"})
+
+
+def load_trained_probe(stem, model_name, best_override=None):
+    """Reuse a probe a previous Pass A already fit, so this run only pays for Pass B.
+
+    Both probe types are needed — Pass B scores SVM and mean-difference side by side. The
+    checks here are the point: a probe read at a different position, or indexed off by the
+    embedding layer, produces plausible numbers rather than an error.
+    """
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    from probe_io import load_probe
+
+    svm_w, svm_b, svm_layers, meta = load_probe(f"{stem}_svm")
+    dirs, _, sd_layers, sd_meta = load_probe(f"{stem}_single_direction")
+
+    if meta["model"] != model_name:
+        raise SystemExit(f"probe was trained on {meta['model']!r} but this run is {model_name!r}")
+    for key in ("read_position", "layer_index"):
+        if meta[key] != sd_meta[key]:
+            raise SystemExit(f"{stem}: the two probes disagree on {key} — are they from one Pass A?")
+    if dirs.shape != svm_w.shape:
+        raise SystemExit(f"{stem}: shape mismatch, svm {svm_w.shape} vs single_direction {dirs.shape}")
+    for name, lay in (("svm", svm_layers), ("single_direction", sd_layers)):
+        if not np.array_equal(lay, np.arange(len(lay))):
+            raise SystemExit(f"{stem}_{name}: Pass B scores every layer in order, so the probe must "
+                             f"cover layers 0..L-1 contiguously; got {lay[:6].tolist()}...")
+
+    best = best_override if best_override is not None else meta.get("val_cv_best_layer")
+    if best is None:
+        raise SystemExit(f"{stem}_svm has no val_cv_best_layer — pass --best-layer. (It only sets "
+                         "the .eval Score column; the pinned metric is AUC mean-over-layers.)")
+    return svm_w, svm_b, dirs, meta.get("val_cv_by_layer"), int(best), int(meta.get("n_val", 0)), meta
+
+
+def check_against_model(model, w):
+    """Fail before Pass B rather than on the first sample, when the config makes it knowable."""
+    cfg = getattr(getattr(model.api, "model", None), "config", None)
+    if cfg is None:
+        return                                       # the scorer's shape guard still applies
+    want = (int(cfg.num_hidden_layers), int(cfg.hidden_size))
+    if w.shape != want:
+        raise SystemExit(f"reused probe is {w.shape} but this model has {want} "
+                         "(layers, hidden) — wrong probe, or a different layer convention")
 
 
 def refusal_map(pattern):
@@ -195,6 +252,11 @@ def main():
     ap.add_argument("--probe-out", default=None,
                     help="stem for the canonical probe artifacts written right after Pass A "
                          "(default: <out>_probe)")
+    ap.add_argument("--probe-in", default=None,
+                    help="canonical probe stem from an earlier Pass A (<stem>_svm, "
+                         "<stem>_single_direction). Skips Pass A entirely — only Pass B runs.")
+    ap.add_argument("--best-layer", type=int, default=None,
+                    help="override the reused probe's best layer (sets the Score column only)")
     ap.add_argument("--out", default="/opt/qwen35_inscorer_experiment.json")
     args = ap.parse_args()
 
@@ -202,27 +264,41 @@ def main():
     model = get_model(f"hf/{args.model}", hidden_states=True, device=args.device,
                       enable_thinking=False)
 
-    # ---- PASS A: harvest val, train ----
-    print("PASS A — harvest val activations (in-scorer) ...", flush=True)
-    inspect_eval(task("harmful", "val", collect_val(1)), model=model, log_dir=args.log_dir)
-    inspect_eval(task("benign", "val", collect_val(0)), model=model, log_dir=args.log_dir)
-    Xval = np.stack(VAL["X"]); yval = np.array(VAL["y"])
-    print(f"  val activations {Xval.shape} ({int(yval.sum())} harmful / {int((yval==0).sum())} benign)", flush=True)
-    np.savez(args.acts_out, X=Xval, y=yval)              # persist val acts (training set)
+    if args.probe_in:
+        # ---- PASS A skipped: reuse a probe an earlier run already fit ----
+        # The val split is a fixed 64 rows and the fit is deterministic, so re-harvesting it
+        # reproduces the same weights bit for bit. Reuse buys back one full agentic GPU pass.
+        print(f"PASS A skipped — reusing probe {args.probe_in}", flush=True)
+        svm_w, svm_b, dirs, cv, best, n_val, pmeta = load_trained_probe(
+            args.probe_in, args.model, args.best_layer)
+        check_against_model(model, svm_w)
+        print(f"  {svm_w.shape[0]} layers x {svm_w.shape[1]} dims | trained on {pmeta['trained_on']}",
+              flush=True)
+        print(f"  read position: {pmeta['read_position']}", flush=True)
+        print(f"  best layer L{best}" + ("" if args.best_layer is None else " (overridden)"), flush=True)
+    else:
+        # ---- PASS A: harvest val, train ----
+        print("PASS A — harvest val activations (in-scorer) ...", flush=True)
+        inspect_eval(task("harmful", "val", collect_val(1)), model=model, log_dir=args.log_dir)
+        inspect_eval(task("benign", "val", collect_val(0)), model=model, log_dir=args.log_dir)
+        Xval = np.stack(VAL["X"]); yval = np.array(VAL["y"])
+        print(f"  val activations {Xval.shape} ({int(yval.sum())} harmful / {int((yval==0).sum())} benign)", flush=True)
+        np.savez(args.acts_out, X=Xval, y=yval)          # persist val acts (training set)
 
-    svm_w, svm_b, dirs, cv = train_probe(Xval, yval)
-    best = int(np.argmax(cv))
+        svm_w, svm_b, dirs, cv = train_probe(Xval, yval)
+        best = int(np.argmax(cv)); n_val = len(yval); cv = cv.tolist()
+        print(f"  trained probe; best layer by val-CV L{best} (AUC {cv[best]:.3f})", flush=True)
+
+        # Persist the probe NOW, in canonical form. It otherwise exists only in the module-level W
+        # until the scores npz is written at the very end, so anything failing in Pass B or the
+        # analysis would discard it. Nothing GPU-bound is lost either way (the fit is deterministic
+        # and the val acts are already on disk), but this keeps the artifact rather than the recipe
+        # — and it is what a later `--probe-in` run consumes.
+        stem = args.probe_out or args.out.replace(".json", "_probe")
+        save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, args.model, cv, best)
+        print(f"  saved canonical probes -> {stem}_*", flush=True)
+
     W.update(svm_w=svm_w, svm_b=svm_b, dirs=dirs, best_layer=best)
-    print(f"  trained probe; best layer by val-CV L{best} (AUC {cv[best]:.3f})", flush=True)
-
-    # Persist the probe NOW, in canonical form. It otherwise exists only in the module-level W
-    # until the scores npz is written at the very end, so anything failing in Pass B or the
-    # analysis would discard it. Nothing GPU-bound is lost either way (the fit is deterministic
-    # and the val acts are already on disk), but this keeps the artifact rather than the recipe.
-    save_canonical_probes(args.probe_out or args.out.replace(".json", "_probe"),
-                          svm_w, svm_b, dirs, Xval, yval, args.model)
-    print(f"  saved canonical probes -> {args.probe_out or args.out.replace('.json', '_probe')}_*",
-          flush=True)
 
     # ---- PASS B: probe fires live on held-out test ----
     print("PASS B — probe as scorer on held-out test (in-scorer) ...", flush=True)
@@ -243,7 +319,7 @@ def main():
     ids = [i for i in TEST["harmful"] if i in href]
     ref = np.array([href[i][1] for i in ids])
     io = np.array([TEST["harmful"][i]["id_original"] for i in ids])
-    L = Xval.shape[1]
+    L = svm_w.shape[0]
     md = np.array([[TEST["harmful"][i]["md"][l] for l in range(L)] for i in ids])       # (n, L)
     svm = np.array([[TEST["harmful"][i]["svm"][l] for l in range(L)] for i in ids])
     bmd = np.array([[TEST["benign"][i]["md"][l] for l in range(L)] for i in TEST["benign"]])
@@ -268,8 +344,9 @@ def main():
     res_svm = summarize("SVM", svm, bsvm)
 
     json.dump({"model": args.model, "context": "in-scorer (real agent system prompt + tools)",
-               "n_val": int(len(yval)), "n_test_harmful": len(ids), "n_test_benign": len(bmd),
-               "refusal_rate": float(ref.mean()), "val_cv_by_layer": cv.tolist(),
+               "probe_source": args.probe_in or "trained in this run (Pass A)",
+               "n_val": n_val, "n_test_harmful": len(ids), "n_test_benign": len(bmd),
+               "refusal_rate": float(ref.mean()), "val_cv_by_layer": cv,
                "val_cv_best_layer": best, "mean_diff": res_md, "svm": res_svm,
                "test_ids": ids}, open(args.out, "w"), indent=2)
 

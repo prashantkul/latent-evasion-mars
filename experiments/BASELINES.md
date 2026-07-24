@@ -171,6 +171,28 @@ uv run python experiments/eval_probe.py --probe path/to/new_probe --acts <test_a
 ```
 
 Regenerate the canonical artifacts from the `06` run: `uv run python experiments/probe_io.py`.
+Fresh runs of `qwen35_inscorer_experiment.py` now emit them directly, right after Pass A.
+
+### Skipping Pass A
+
+The val split is a fixed 64 rows and the fit is deterministic, so re-harvesting it reproduces the
+same weights bit for bit — a rerun confirmed `max|Δw| = 0`. A GPU run that only needs Pass B can
+therefore reuse the frozen probe and skip Pass A outright:
+
+```bash
+python3 $R06/qwen35_inscorer_experiment.py \
+  --probe-in $R06/probe_canonical/qwen35 \
+  --test-acts-out <test_acts.npz> --out <run.json>
+```
+
+`--probe-in` takes the *stem* (it loads `<stem>_svm` and `<stem>_single_direction`, both needed
+because Pass B scores them side by side). Reuse is checked rather than assumed: model id, read
+position, layer-index convention, matching shapes, contiguous layer coverage `0..L-1`, and the
+model's own `(num_hidden_layers, hidden_size)`. Any mismatch stops the run before Pass B.
+
+The best layer comes from the sidecar's `val_cv_best_layer`; `--best-layer` overrides it. It sets
+only the `.eval` Score column — the pinned metric is AUC mean-over-layers, which needs no
+selection. `run_qwen35_test_acts_cache.sh` reuses by default; `PROBE_IN= ` retrains.
 
 ---
 

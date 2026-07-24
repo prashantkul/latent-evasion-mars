@@ -9,5 +9,6 @@
   "dtype": "bf16 model, float32 probe",
   "provenance": "experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py (Pass A)",
   "probe_type": "single_direction",
-  "fit": "unit-norm centroid difference; bias = midpoint between val centroids"
+  "fit": "unit-norm centroid difference; bias = midpoint between val centroids",
+  "n_val": 64
 }

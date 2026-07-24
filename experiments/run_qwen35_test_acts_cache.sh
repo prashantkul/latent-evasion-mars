@@ -42,12 +42,25 @@ for pat in "$H_LOG" "$B_LOG"; do
     fi
 done
 
+# Reuse the frozen probe by default: the val split is a fixed 64 rows and the fit is
+# deterministic, so Pass A would re-derive weights we already have bit for bit. This halves
+# the agentic GPU time. Set PROBE_IN= (empty) to retrain from scratch instead.
+PROBE_IN=${PROBE_IN-$REPO/experiments/results/06-qwen35-inscorer-probe/probe_canonical/qwen35}
+if [ -n "$PROBE_IN" ]; then
+    REUSE=(--probe-in "$PROBE_IN")
+    echo "reusing probe: $PROBE_IN (Pass A skipped)"
+else
+    REUSE=()
+    echo "retraining: Pass A will run"
+fi
+
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
-echo "=== two-pass in-scorer experiment (Pass A: val/train, Pass B: test/eval + cache all layers) ==="
+echo "=== in-scorer experiment (Pass A: val/train, Pass B: test/eval + cache all layers) ==="
 
 python3 experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py \
     --model "$QWEN35_27B_MODEL" \
     --device cuda:0 \
+    "${REUSE[@]}" \
     --harmful-log "$H_LOG" \
     --benign-log  "$B_LOG" \
     --log-dir     "$OUT/logs_qwen35_acts_cache" \

@@ -10,5 +10,6 @@
   "provenance": "experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py (Pass A)",
   "provenance_note": "re-baselined 2026-07-24 from GCS gs://probe-activations-123213e/qwen35-27b/in-context/2026-07-24/",
   "probe_type": "single_direction",
-  "fit": "unit-norm centroid difference; bias = midpoint between val centroids"
+  "fit": "unit-norm centroid difference; bias = midpoint between val centroids",
+  "n_val": 64
 }

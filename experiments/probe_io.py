@@ -128,16 +128,20 @@ _BASE_META = {
 }
 
 
-def migrate_06(out_dir: Optional[str] = None) -> List[str]:
+def migrate_06(out_dir: Optional[str] = None, scores: Optional[str] = None,
+               val_acts: Optional[str] = None, extra_meta: Optional[Dict] = None) -> List[str]:
+    """Canonicalize an in-scorer run's probe. Defaults to the committed 06 artifacts; pass
+    `scores`/`val_acts` to canonicalize a fresh run (e.g. a re-baselined activation cache)."""
     out_dir = out_dir or os.path.join(R06, "probe_canonical")
-    z = np.load(os.path.join(R06, "qwen35_inscorer_experiment_scores.npz"), allow_pickle=True)
-    v = np.load(os.path.join(R06, "qwen35_inscorer_val_acts.npz"), allow_pickle=True)
+    z = np.load(scores or os.path.join(R06, "qwen35_inscorer_experiment_scores.npz"), allow_pickle=True)
+    v = np.load(val_acts or os.path.join(R06, "qwen35_inscorer_val_acts.npz"), allow_pickle=True)
     Xv, yv = v["X"], v["y"]
+    base = {**_BASE_META, **(extra_meta or {})}
 
     written = []
     stem = os.path.join(out_dir, "qwen35_svm")
     written += list(save_probe(stem, z["svm_w"], z["svm_bias"],
-                               {**_BASE_META, "probe_type": "svm",
+                               {**base, "probe_type": "svm",
                                 "fit": "LinearSVC C=0.1, StandardScaler folded into raw-space (w, b)"}))
 
     # Mean-difference: 06 stored only the unit direction and applied the threshold ad hoc
@@ -149,11 +153,20 @@ def migrate_06(out_dir: Optional[str] = None) -> List[str]:
     sd_b = -0.5 * np.einsum("lh,lh->l", dirs, mu1 + mu0)
     stem = os.path.join(out_dir, "qwen35_single_direction")
     written += list(save_probe(stem, dirs, sd_b,
-                               {**_BASE_META, "probe_type": "single_direction",
+                               {**base, "probe_type": "single_direction",
                                 "fit": "unit-norm centroid difference; bias = midpoint between val centroids"}))
     return written
 
 
 if __name__ == "__main__":
-    for p in migrate_06():
-        print("wrote", p)
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Canonicalize an in-scorer run's probe artifacts.")
+    ap.add_argument("--scores", help="<run>_scores.npz (svm_w / svm_bias / dirs). Default: committed 06.")
+    ap.add_argument("--val-acts", help="val activations npz the probe was fit on. Default: committed 06.")
+    ap.add_argument("--out-dir", help="destination directory for the canonical artifacts")
+    ap.add_argument("--note", help="free-text provenance appended to the metadata")
+    a = ap.parse_args()
+    extra = {"provenance_note": a.note} if a.note else None
+    for f in migrate_06(a.out_dir, a.scores, a.val_acts, extra):
+        print("wrote", f)

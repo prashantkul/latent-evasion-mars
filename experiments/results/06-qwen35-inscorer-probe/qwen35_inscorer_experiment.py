@@ -133,6 +133,33 @@ def train_probe(X, y):
     return svm_w, svm_b, dirs, cv
 
 
+def save_canonical_probes(stem, svm_w, svm_b, dirs, Xval, yval, model_name):
+    """Write both probes in the schema eval_probe.py / CLE consume (experiments/probe_io.py)."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    from probe_io import save_probe
+
+    meta = {"model": model_name, "hidden": int(Xval.shape[2]),
+            "read_position": "post-instruction token (-1), in-context: read inside the Inspect "
+                             "scorer from the model's real agentic context (AgentHarm agent "
+                             "system prompt + tools)",
+            "layer_index": "0-based over transformer blocks; embedding layer skipped (hidden_states[l+1])",
+            "score": "x @ w + b; fires when > 0",
+            "trained_on": f"AgentHarm val split, {int(yval.sum())} harmful / {int((yval == 0).sum())} benign, in-context",
+            "enable_thinking": False, "dtype": "bf16 model, float32 probe",
+            "provenance": "qwen35_inscorer_experiment.py Pass A"}
+    save_probe(f"{stem}_svm", svm_w, svm_b,
+               {**meta, "probe_type": "svm",
+                "fit": "LinearSVC C=0.1, StandardScaler folded into raw-space (w, b)"})
+    # Mean-difference carries no bias at fit time; the canonical form derives the midpoint
+    # boundary so the artifact is self-contained.
+    mu1 = Xval[yval == 1].mean(0).astype(np.float32)
+    mu0 = Xval[yval == 0].mean(0).astype(np.float32)
+    sd_b = -0.5 * np.einsum("lh,lh->l", dirs.astype(np.float32), mu1 + mu0)
+    save_probe(f"{stem}_single_direction", dirs, sd_b,
+               {**meta, "probe_type": "single_direction",
+                "fit": "unit-norm centroid difference; bias = midpoint between val centroids"})
+
+
 def refusal_map(pattern):
     p = sorted(glob.glob(pattern), key=os.path.getsize)[-1]
     out = {}
@@ -165,6 +192,9 @@ def main():
     ap.add_argument("--test-acts-out", default="/opt/qwen35_inscorer_test_acts.npz",
                     help="cache in-context TEST activations so a new probe can be re-evaluated "
                          "on CPU (experiments/eval_probe.py) without another agentic GPU run")
+    ap.add_argument("--probe-out", default=None,
+                    help="stem for the canonical probe artifacts written right after Pass A "
+                         "(default: <out>_probe)")
     ap.add_argument("--out", default="/opt/qwen35_inscorer_experiment.json")
     args = ap.parse_args()
 
@@ -184,6 +214,15 @@ def main():
     best = int(np.argmax(cv))
     W.update(svm_w=svm_w, svm_b=svm_b, dirs=dirs, best_layer=best)
     print(f"  trained probe; best layer by val-CV L{best} (AUC {cv[best]:.3f})", flush=True)
+
+    # Persist the probe NOW, in canonical form. It otherwise exists only in the module-level W
+    # until the scores npz is written at the very end, so anything failing in Pass B or the
+    # analysis would discard it. Nothing GPU-bound is lost either way (the fit is deterministic
+    # and the val acts are already on disk), but this keeps the artifact rather than the recipe.
+    save_canonical_probes(args.probe_out or args.out.replace(".json", "_probe"),
+                          svm_w, svm_b, dirs, Xval, yval, args.model)
+    print(f"  saved canonical probes -> {args.probe_out or args.out.replace('.json', '_probe')}_*",
+          flush=True)
 
     # ---- PASS B: probe fires live on held-out test ----
     print("PASS B — probe as scorer on held-out test (in-scorer) ...", flush=True)

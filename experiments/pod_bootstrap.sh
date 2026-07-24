@@ -53,8 +53,30 @@ if [ -f "$REQ" ]; then
 else
     echo "  MISSING $REQ — cannot pin the environment" >&2; fail=1
 fi
+
+# torch is a transitive dep of transformers/accelerate, so uv installs a PyPI build INTO the venv
+# no matter that --system-site-packages makes the image's build importable. That shadowed the
+# CUDA-matched 2.9.1+cu130 with 2.13.0 and cost ~10 GB. Removing it here makes the venv fall
+# through to system site-packages, which is the whole point of creating it that way.
+SHADOW=$(uv pip list --python "$VENV/bin/python" 2>/dev/null \
+    | awk '$1=="torch" || $1 ~ /^nvidia-/ || $1=="triton" {print $1}')
+if [ -n "$SHADOW" ]; then
+    echo "  removing $(echo "$SHADOW" | wc -w) torch/CUDA wheel(s) that shadow the image build"
+    # shellcheck disable=SC2086
+    uv pip uninstall --python "$VENV/bin/python" $SHADOW > /dev/null 2>&1 || true
+fi
+
 note "python" "$("$VENV/bin/python" -V 2>&1) at $VENV"
-for mod in inspect_ai inspect_evals transformers sklearn openai torch; do
+# The venv MUST see the image's torch, not its own. A mismatch means the removal above missed
+# something, and a run would then execute against an untested CUDA stack.
+vt=$("$VENV/bin/python" -c "import torch;print(torch.__version__)" 2>/dev/null || echo NONE)
+st=$(python3 -c "import torch;print(torch.__version__)" 2>/dev/null || echo NONE)
+if [ "$vt" = "$st" ]; then
+    note "torch (from image)" "$vt"
+else
+    note "torch" "MISMATCH — venv $vt vs image $st"; fail=1
+fi
+for mod in inspect_ai inspect_evals transformers sklearn openai; do
     v=$("$VENV/bin/python" -c "import importlib.metadata as m,sys;sys.stdout.write(m.version('$mod'.replace('sklearn','scikit-learn')))" 2>/dev/null) \
         && note "$mod" "$v" || { note "$mod" "MISSING"; fail=1; }
 done

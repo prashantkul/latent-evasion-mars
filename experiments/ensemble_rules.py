@@ -41,7 +41,7 @@ def confusion(y, pred):
     return (TP + TN) / len(y), TP / (TP + FN or 1), FP / (TN + FP or 1)
 
 
-def rules(s_val, s_test, y_val):
+def rules(s_val, s_test, y_val, w=None, coef_norm=None):
     """Each rule -> (val score fn applied to test, threshold derived from val)."""
     mu, sd = s_val.mean(0), s_val.std(0) + 1e-9
 
@@ -51,6 +51,25 @@ def rules(s_val, s_test, y_val):
 
     out = {}
     out["raw mean"] = (s_test.mean(1), 0.0)                     # canonical boundary, no fitting
+    if coef_norm is not None:
+        # THE SVM COEFFICIENT NORM. The artifact stores w = svc.coef_ / scaler.scale_ (the scaler
+        # folded back into raw space), so ||w|| is a RAW-space norm and is NOT ||svc.coef_||.
+        # Recovering it: coef_ = w * scale_, with scale_ the val activations' per-dim std.
+        # Dividing by it gives the distance to the hyperplane in the STANDARDIZED space the SVM
+        # was actually fit in -- units of training standard deviations, which is the more
+        # defensible common unit across layers whose raw activation scales differ by orders.
+        out["distance mean (/||coef_||)"] = ((s_test / coef_norm).mean(1, dtype=np.float64), 0.0)
+    if w is not None:
+        # (w.h + b) / ||w|| is the SIGNED DISTANCE from the point to the layer's hyperplane.
+        # The raw decision function's scale is set by ||w||, which C and the margin fix rather
+        # than anything about separability, so raw scores are not commensurable across layers.
+        # Dividing restores a common geometric unit, needs NO val statistics (unlike z-scoring),
+        # and leaves the boundary at exactly 0 -- so `> 0` stays the canonical firing rule.
+        # Note the mean-difference probe is already unit-norm, so for it this is a no-op: the
+        # normalisation is what makes the two probe types commensurable.
+        nw = np.linalg.norm(w, axis=1) + 1e-12                  # (L,)
+        out["distance mean (/||w||)"] = (s_test / nw).mean(1, dtype=np.float64), 0.0
+        out["distance median"] = (np.median(s_test / nw, 1), 0.0)
     zv, zt = (s_val - mu) / sd, (s_test - mu) / sd
     out["z-scored mean"] = (zt.mean(1), thresh_at(zv.mean(1)))
     out["median"] = (np.median(s_test, 1), 0.0)
@@ -75,10 +94,22 @@ def main():
     s_test, y_test = probe_score(t["X"], w, b), t["y"].astype(int)
     print(f"probe {os.path.basename(args.probe)}  val {s_val.shape}  test {s_test.shape}")
 
+    # StandardScaler was fit on the val activations, so scale_ is their per-dim std (ddof=0).
+    # coef_ = w * scale_ inverts the fold performed in raw_wb().
+    scale_ = v["X"].std(0, dtype=np.float64)                       # (L, H)
+    coef_ = w * scale_
+    coef_norm = np.linalg.norm(coef_, axis=1)                      # (L,)
+
     # --- is the raw mean actually an ensemble, or one loud layer? ---
     scale = s_test.std(0)
     order = np.argsort(scale)[::-1]
     share = scale**2 / (scale**2).sum()
+    nw = np.linalg.norm(w, axis=1)
+    print(f"\nper-layer ||coef_|| (standardized space): min {coef_norm.min():.4g}  "
+          f"median {np.median(coef_norm):.4g}  max {coef_norm.max():.4g}  "
+          f"({coef_norm.max()/coef_norm.min():.1f}x spread)")
+    print(f"per-layer ||w||: min {nw.min():.4g}  median {np.median(nw):.4g}  max {nw.max():.4g}  "
+          f"({nw.max()/nw.min():.1f}x spread) -- how much the raw scale differs between layers")
     print(f"\nper-layer score scale (test std): min {scale.min():.2f}  median {np.median(scale):.2f}  "
           f"max {scale.max():.2f}  ({scale.max()/scale.min():.0f}x spread)")
     print(f"  loudest layers {order[:5].tolist()} carry {share[order[:5]].sum():.1%} of total variance")
@@ -92,7 +123,7 @@ def main():
     nh = int(y_test.sum())
     print(f"\n{'rule':16s} {'AUC h-v-b':>10s} {'acc':>7s} {'recall':>7s} {'FPR':>7s}   {'AUC->refusal':>12s}")
     res = {}
-    for name, (v_test, thr) in rules(s_val, s_test, y_val).items():
+    for name, (v_test, thr) in rules(s_val, s_test, y_val, w, coef_norm).items():
         auc = roc_auc_score(y_test, v_test)
         acc, rec, fpr = confusion(y_test, (v_test > thr).astype(int))
         ar = roc_auc_score(ref, v_test[:nh]) if ref is not None and 0 < ref.sum() < len(ref) else float("nan")
@@ -120,22 +151,46 @@ def main():
     # qwen35_inscorer_experiment.cluster_ci: samples sharing a behaviour are not independent.
     io = np.load(args.scores, allow_pickle=True)["io"] if args.scores else None
     if io is not None and ref is not None:
-        r = rules(s_val, s_test, y_val)
-        pairs = [("median", "raw mean"), ("z-scored mean", "raw mean")]
+        r = rules(s_val, s_test, y_val, w, coef_norm)
+        pairs = [("distance mean (/||w||)", "raw mean"), ("distance median", "distance mean (/||w||)"),
+                 ("distance mean (/||coef_||)", "raw mean"),
+                 ("distance mean (/||coef_||)", "distance mean (/||w||)"),
+                 ("median", "raw mean"), ("z-scored mean", "raw mean")]
         uniq = np.unique(io); idx = {c: np.where(io == c)[0] for c in uniq}
         rng = np.random.default_rng(0)
         draws = []
         for _ in range(5000):
             i = np.concatenate([idx[c] for c in rng.choice(uniq, len(uniq), replace=True)])
             draws.append(i if len(set(ref[i])) > 1 else None)
+        def verdict(d):
+            lo, hi = np.percentile(d, [2.5, 97.5])
+            return (f"{d.mean():+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]  "
+                    f"{'excludes 0' if lo > 0 or hi < 0 else 'includes 0 — not separable here'}")
+
         print("\npaired cluster bootstrap on AUC->refusal (5000 draws over behaviour ids):")
         for a, base in pairs:
             va, vb = r[a][0][:nh], r[base][0][:nh]
             d = np.array([roc_auc_score(ref[i], va[i]) - roc_auc_score(ref[i], vb[i])
                           for i in draws if i is not None])
-            lo, hi = np.percentile(d, [2.5, 97.5])
-            verdict = "excludes 0" if lo > 0 or hi < 0 else "includes 0 — not separable here"
-            print(f"  {a:14s} - {base:14s}  {d.mean():+.4f}  95% CI [{lo:+.4f}, {hi:+.4f}]  {verdict}")
+            print(f"  {a:24s} - {base:24s}  {verdict(d)}")
+
+        # Same question for the PRIMARY objective. Harmful rows are resampled by behaviour cluster
+        # (they are not independent); benign rows have no behaviour id here, so they are resampled
+        # individually -- stated because it makes this interval slightly narrower than a fully
+        # clustered one would be.
+        rng2 = np.random.default_rng(1)
+        nb = len(y_test) - nh
+        hb_draws = []
+        for _ in range(5000):
+            ih = np.concatenate([idx[c] for c in rng2.choice(uniq, len(uniq), replace=True)])
+            ib = nh + rng2.integers(0, nb, nb)
+            hb_draws.append(np.concatenate([ih, ib]))
+        print("\npaired bootstrap on AUC harm-vs-benign (harmful clustered, benign by row):")
+        for a, base in pairs:
+            va, vb = r[a][0], r[base][0]
+            d = np.array([roc_auc_score(y_test[i], va[i]) - roc_auc_score(y_test[i], vb[i])
+                          for i in hb_draws])
+            print(f"  {a:24s} - {base:24s}  {verdict(d)}")
 
     if args.out:
         json.dump(res, open(args.out, "w"), indent=2)

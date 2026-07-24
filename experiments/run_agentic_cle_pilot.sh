@@ -16,6 +16,10 @@
 set -euo pipefail
 
 REPO=${REPO:-/workspace/latent-evasion-mars}
+# The pinned venv on the network volume (pod_bootstrap.sh). Falls back to
+# system python so the script still runs on a box without it.
+PY=${PY:-/workspace/.venv/bin/python}
+[ -x "$PY" ] || PY=python3
 OUT=${OUT:-/workspace/cle_pilot}
 SPLIT=${SPLIT:-val}
 LAYERS=${LAYERS:-20-30}
@@ -43,9 +47,10 @@ nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 echo "=== agentic CLE — split=$SPLIT layers=$LAYERS beta=$BETA margin=q$QUANTILE of val harmless ==="
 echo "    margins come from VAL activations only; the test split stays held out"
 echo "    --control runs beta=0 first: an exact no-op through the identical code path, so the"
-echo "    comparison isolates the intervention rather than the hf-vs-vLLM provider change"
+echo "    control-vs-attacked comparison isolates the intervention. NOTE it is not a check"
+echo "    against BASELINES.md, which is test_public on vLLM -- two differences at once."
 
-python3 experiments/agentic_cle.py \
+"$PY" experiments/agentic_cle.py \
     --model "$QWEN35_27B_MODEL" \
     --device cuda:0 \
     --probe "$PROBE" \

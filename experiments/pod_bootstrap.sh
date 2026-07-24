@@ -15,6 +15,7 @@
 set -uo pipefail
 
 REPO=${REPO:-/workspace/latent-evasion-mars}
+VENV=${VENV:-/workspace/.venv}
 GIT_URL=${GIT_URL:-}
 export HF_HOME=${HF_HOME:-/workspace/.cache/huggingface}
 export PYTHONPATH="$REPO"
@@ -35,16 +36,26 @@ else
 fi
 note "repo" "$REPO @ $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo MISSING)"
 
-# --- deps into system python (no venv: the hf provider must import in-process) ---
-# `openai` is not optional here despite being an extra: AgentHarm's refusal and semantic judges are
-# gpt-4o, and Inspect builds them when the TASK is built, so a missing client kills the run at
-# startup -- after the 27B weights have loaded. Checking the key alone is not enough; a first pilot
-# died here with "OpenAI API requires optional dependencies".
-python3 - <<'PY' 2>/dev/null || pip install -q inspect_ai inspect_evals transformers accelerate scikit-learn openai 2>&1 | tail -2
-import inspect_ai, inspect_evals, transformers, sklearn, openai  # noqa: F401
-PY
-for mod in inspect_ai inspect_evals transformers sklearn openai; do
-    v=$(python3 -c "import $mod,sys;sys.stdout.write(getattr($mod,'__version__','?'))" 2>/dev/null) \
+# --- deps into a venv ON THE NETWORK VOLUME, from a pinned file ---
+# /workspace/.venv survives a pod restart, so this is a no-op on every run after the first. The
+# pins live in experiments/pod-requirements.txt -- one declared environment rather than a package
+# list maintained by hand in this script, which is how a pilot died on a missing `openai` after
+# the 27B weights had loaded. --system-site-packages keeps the image's CUDA-matched torch visible;
+# installing a PyPI torch over it risks a driver mismatch and a multi-GB download.
+REQ="$REPO/experiments/pod-requirements.txt"
+if [ ! -x "$VENV/bin/python" ]; then
+    echo "  creating $VENV (first run on this volume)"
+    uv venv --system-site-packages --python 3.12 "$VENV" 2>&1 | tail -2
+fi
+if [ -f "$REQ" ]; then
+    UV_CACHE_DIR=/workspace/.uv-cache uv pip install --python "$VENV/bin/python" \
+        -q -r "$REQ" 2>&1 | tail -3
+else
+    echo "  MISSING $REQ — cannot pin the environment" >&2; fail=1
+fi
+note "python" "$("$VENV/bin/python" -V 2>&1) at $VENV"
+for mod in inspect_ai inspect_evals transformers sklearn openai torch; do
+    v=$("$VENV/bin/python" -c "import importlib.metadata as m,sys;sys.stdout.write(m.version('$mod'.replace('sklearn','scikit-learn')))" 2>/dev/null) \
         && note "$mod" "$v" || { note "$mod" "MISSING"; fail=1; }
 done
 

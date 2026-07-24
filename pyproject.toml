@@ -1,0 +1,49 @@
+# SCOPE: this file pins the LOCAL analysis environment (plots, eval_probe.py, probe_io.py) and is
+# what `uv run` uses on a laptop. It is NOT what produces the frozen numbers.
+#
+# GPU runs pin separately in experiments/pod-requirements.txt, installed into /workspace/.venv by
+# experiments/pod_bootstrap.sh. They are deliberately allowed to differ: the pod's torch is
+# supplied by the RunPod image and CUDA-matched to the driver, so it cannot live in a portable
+# lock, and the rest of the GPU stack is pinned to whatever produced BASELINES.md. If you need to
+# know which versions a frozen number came from, read pod-requirements.txt, not this file.
+
+[project]
+name = "latent-evasion"
+version = "0.1.0"
+description = "Latent-space attacks for refusal evasion in language models (CLE)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "accelerate==1.2.0",
+    "datasets==4.8.4",
+    "huggingface_hub==0.36.2",
+    "inspect_ai==0.3.249",
+    "matplotlib==3.10.8",
+    "mistral_common==1.11.0",
+    "numpy==2.2.6",
+    "openai-harmony==0.0.8",
+    "optuna==4.8.0",
+    "pandas==2.3.3",
+    "peft==0.18.1",
+    "pillow==12.2.0",
+    "protobuf==6.33.6",
+    "requests==2.33.1",
+    "safetensors==0.7.0",
+    "scikit-learn==1.8.0",
+    "scipy==1.17.1",
+    "seaborn==0.13.2",
+    "sentencepiece==0.2.1",
+    "tiktoken==0.12.0",
+    "tokenizers==0.22.2",
+    # CUDA-only, DGX-side (nvidia-cudnn-frontend etc. have no macOS wheels) — see experiments/dgx-setup.md
+    # "torch==2.10.0",
+    # "torchaudio==2.10.0",
+    # "torchvision==0.25.0",
+    "tqdm==4.67.3",
+    "transformers==4.57.6",
+    # "vllm==0.19.0",
+]
+
+[tool.uv]
+package = false

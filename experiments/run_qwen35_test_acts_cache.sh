@@ -17,6 +17,10 @@
 set -euo pipefail
 
 REPO=${REPO:-/workspace/latent-evasion-mars}
+# The pinned venv on the network volume (pod_bootstrap.sh). Falls back to
+# system python so the script still runs on a box without it.
+PY=${PY:-/workspace/.venv/bin/python}
+[ -x "$PY" ] || PY=python3
 OUT=${OUT:-/workspace/acts_cache}
 mkdir -p "$OUT"
 cd "$REPO"
@@ -57,7 +61,7 @@ fi
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 echo "=== in-scorer experiment (Pass A: val/train, Pass B: test/eval + cache all layers) ==="
 
-python3 experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py \
+"$PY" experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py \
     --model "$QWEN35_27B_MODEL" \
     --device cuda:0 \
     "${REUSE[@]}" \

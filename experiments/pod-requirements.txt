@@ -1,0 +1,31 @@
+# GPU environment — the exact versions that produced the frozen baselines in BASELINES.md.
+#
+# This is the source of truth for anything run on the pod. pod_bootstrap.sh installs it into
+# /workspace/.venv, which lives on the network volume and therefore SURVIVES a pod restart --
+# unlike /opt, and unlike installing into system python, which is what we were doing and how a
+# pilot died on a missing `openai` after the 27B weights had already loaded.
+#
+# Captured from the pod on 2026-07-24 (python 3.12.3), the same environment in which the two-pass
+# run reproduced test AUCs to 4 dp and refit a bit-identical probe. Bump deliberately, not
+# incidentally: a silent version drift here is indistinguishable from a real result change.
+#
+# torch is deliberately ABSENT. The RunPod image ships torch 2.9.1+cu130 built against the
+# driver; installing a PyPI torch on top risks a CUDA mismatch and a multi-GB download. The venv
+# is created with --system-site-packages so the image's torch/CUDA stack stays visible.
+
+inspect_ai==0.3.249
+inspect_evals==0.16.0
+transformers==5.14.1
+tokenizers==0.22.2
+safetensors==0.8.0
+huggingface-hub==1.16.1
+datasets==5.0.0
+accelerate==1.14.0
+
+# AgentHarm's refusal + semantic judges are gpt-4o, and Inspect builds them at task-BUILD time,
+# so this is required merely to LOAD the task -- not only to score it.
+openai==2.48.0
+
+numpy==2.5.1
+scipy==1.18.0
+scikit-learn==1.9.0

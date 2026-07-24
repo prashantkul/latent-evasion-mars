@@ -36,27 +36,38 @@ folder for history only.
   calibration (see the SVM caveat below).
 - `auc_probe_to_refusal_harmful` — does the probe predict the model's own refusal, on harmful only.
 
-**The combining rule is the unweighted mean of raw per-layer scores**, and the Inspect scorer emits
-the same thing (`svm.mean() > 0`) rather than a selected layer. A probe artifact is a stack of L
-independent `(w, b)` pairs, so "the probe fires" needs a rule; picking one layer is the lottery
-described above. Alternatives measured on held-out test (`experiments/ensemble_rules.py`):
+**The combining rule is the mean of `score / ||svc.coef_||` across layers**, and the Inspect scorer
+emits the same thing (`(svm / coef_norm).mean() > 0`) rather than a selected layer. A probe artifact
+is a stack of L independent `(w, b)` pairs, so "the probe fires" needs a rule; picking one layer is
+the lottery described above. Alternatives measured on held-out test
+(`experiments/ensemble_rules.py`):
 
 | rule | AUC h-v-b | acc | recall | FPR | AUC→refusal |
 |---|---|---|---|---|---|
-| **raw mean** | **0.9561** | 0.892 | 0.886 | 0.102 | 0.7708 |
+| **mean of score/‖coef_‖** *(pinned)* | **0.9518** | 0.886 | 0.875 | 0.102 | **0.8319** |
+| raw mean *(pinned until 24 Jul)* | 0.9561 | 0.892 | 0.886 | 0.102 | 0.7708 |
 | z-scored mean (val stats) | 0.9561 | 0.892 | 0.886 | 0.102 | 0.7811 |
 | median | 0.9486 | 0.875 | 0.875 | 0.125 | 0.8263 |
 | vote fraction | 0.9441 | 0.881 | 0.875 | 0.114 | 0.6388 |
 | best layer L18 | 0.9215 | 0.841 | 0.818 | 0.136 | 0.7442 |
 
-The raw mean wins on the primary objective and needs no val-derived calibration — `> 0` is already
-the canonical boundary. Scale-domination is not a concern for this probe: per-layer score std spans
-only 2× (the StandardScaler fold already normalised), the mean correlates at most r=0.946 with any
-single layer, and dropping the 10 loudest layers moves AUC 0.9561 → 0.9536. It is a real ensemble.
+**Why `‖coef_‖`.** `(w·h + b)/‖svc.coef_‖` is the distance to the layer's hyperplane in the
+standardized space the SVM was fit in. Raw per-layer scores are not commensurable — `‖w‖` spans
+**6678×** across layers (the artifact stores `w = coef_/scale_`) where `‖coef_‖` spans only **5.4×**.
+And since an SVM's geometric margin is `1/‖coef_‖`, dividing weights each layer by its own class
+separation rather than by an arbitrary scale. It needs no val statistics and leaves the boundary at
+exactly 0, so `> 0` is still the canonical firing rule and nothing is fitted at eval time.
 
-*Open:* the median is better at predicting refusal (+0.055, paired cluster bootstrap 95% CI
-[+0.002, +0.118]). The interval excludes zero but only just, on one run — suggestive, not settled,
-and not a reason to move the pinned rule yet.
+Against the raw mean, paired cluster bootstrap over behaviour ids: **→refusal +0.0602, 95% CI
+[+0.0210, +0.1091]** (excludes 0); **harm-vs-benign −0.0044, 95% CI [−0.0143, +0.0038]** (includes
+0). A real gain on refusal at no measurable cost on the primary objective.
+
+Note `‖w‖` normalisation is *not* the same thing and is worse: it gains more on refusal (+0.109)
+but costs a real −0.0204 on harm-vs-benign (CI excludes 0), because per-layer score std already
+spans only 2× — dividing by a 6678×-spread quantity introduces imbalance rather than removing it.
+
+*Open:* the median beats the raw mean on refusal too (+0.055, CI [+0.002, +0.118]), but that
+interval only just excludes zero and it loses on the primary objective. Not pursued.
 
 ---
 
@@ -105,13 +116,16 @@ and read **in-context inside the Inspect scorer**:
 | Probe | AUC mean-layers *(headline)* | AUC best layer | acc @ canonical boundary | recall | FPR |
 |---|---|---|---|---|---|
 | `single_direction` (mean-difference) | 0.930 | 0.943 (L24) | 0.858 | 0.864 | 0.148 |
-| `svm` (LinearSVC C=0.1) | **0.956** | 0.948 (L28) | **0.892** | 0.886 | **0.102** |
+| `svm` (LinearSVC C=0.1) | **0.952** | 0.948 (L28) | **0.886** | 0.875 | **0.102** |
 
-probe → refusal AUC (harmful only, mean-layers): `single_direction` 0.913, `svm` 0.771.
+probe → refusal AUC (harmful only, mean-layers): `single_direction` 0.913, `svm` 0.832.
 
 The SVM is the better harm-vs-benign monitor on both axes — higher AUC and, at its own canonical
-boundary, higher accuracy at lower false-alarm rate. Mean-difference remains the better predictor of
-the model's *own refusal* (0.913 vs 0.771), so the two probes are answering different questions.
+boundary, higher accuracy at lower false-alarm rate. Mean-difference is still the better predictor
+of the model's *own refusal* (0.913 vs 0.832), so the two probes answer different questions — though
+the gap narrowed substantially under the ||coef_|| normalisation (the SVM was 0.771 under the raw
+mean). `single_direction` numbers are unchanged by that switch: its directions are already
+unit-norm, so its `coef_norm` is all ones and the normalisation is the identity.
 
 **Reproduction (2026-07-24).** The whole two-pass run was repeated on a fresh pod (transformers
 5.14.1, inspect_ai 0.3.249). Test activations reproduce the previous run's AUCs to four decimals,
@@ -124,7 +138,7 @@ these numbers rather than replacing them.
 | Monitor | acc | recall | FPR |
 |---|---|---|---|
 | gpt-4o judge, majority-of-3 @ T1.0 | 0.770 | 0.989 | 0.449 |
-| probe `svm`, mean-layers @ canonical boundary | **0.892** | 0.886 | **0.102** |
+| probe `svm`, mean-layers @ canonical boundary | **0.886** | 0.875 | **0.102** |
 | probe `single_direction`, mean-layers @ canonical boundary | 0.858 | 0.864 | 0.148 |
 
 The judge over-flags AgentHarm's adversarial benign twins (79/176), verified as genuine: on those

@@ -17,6 +17,13 @@ net of **6 flips: 4 toward compliance, 2 away** (7-2 and 7-3 went from complying
 attack). A 4-2 split is what noise looks like. The pilot establishes that the pipeline runs
 end to end and the control is a genuine no-op — nothing more.
 
+**Caveat found afterwards: this run was SAMPLING.** Inspect's hf provider collects `do_sample`
+as a model arg and defaults it to **True**, so decoding here was stochastic while the frozen vLLM
+baseline is greedy. Control and attacked therefore differ by sampling noise on top of the
+intervention — which is a plausible mechanism for the 4-2 flip split all by itself, and is the
+main reason not to read the deltas as an effect. Fixed for later runs by passing
+`do_sample=False`; setting `temperature=0.0` instead does not work (transformers rejects it).
+
 **What is trustworthy here.** The β=0 control shares every code path with the attacked arm, so the
 comparison is internally valid. Tool-call parsing held (0–3 errors per condition). Benign capability
 did not degrade (+0.0223), so at this margin the intervention is not visibly damaging the model.

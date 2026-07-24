@@ -35,6 +35,7 @@ R06 = os.path.join(HERE, "results", "06-qwen35-inscorer-probe")
 RB = os.path.join(R06, "rebaseline_2026-07-24")
 R08 = os.path.join(HERE, "results", "08-agentic-cle-pilot")   # these plots are about the CLE
                                                                  # intervention, not the 06 probe fit
+RED, BLUE = "#D7263D", "#0072B2"
 plt.rcParams.update({"font.size": 10, "figure.dpi": 130})
 
 
@@ -85,6 +86,10 @@ def main():
             (ax[2], Q - P, "C · change (after − before)", "PuOr_r", float(np.abs(Q - P).max()))):
         im = a.imshow(M, aspect="auto", origin="lower", cmap=cmap, vmin=-vmax, vmax=vmax,
                       interpolation="nearest")
+        # Class background: a red band under the harmful columns, blue under the benign ones, so
+        # which half you are reading is legible without counting across to the divider.
+        a.axvspan(-.5, split - .5, color=RED, alpha=.07, lw=0, zorder=0)
+        a.axvspan(split - .5, len(y) - .5, color=BLUE, alpha=.07, lw=0, zorder=0)
         a.axvline(split - .5, color="k", lw=1.4)
         for edge in (lo - .5, hi + .5):
             a.axhline(edge, color="#111", lw=1.1, ls="--")
@@ -92,9 +97,15 @@ def main():
         a.set_ylabel("layer" if a is ax[0] else "")
         a.set_title(title, loc="left", fontweight="bold", fontsize=10.5)
         fig.colorbar(im, ax=a, fraction=.046, pad=.02)
-    ax[0].text(split * .5, 67, "harmful", ha="center", color="#B2182B", fontweight="bold")
-    ax[0].text(split + (len(y) - split) * .5, 67, "benign", ha="center", color="#2166AC",
-               fontweight="bold")
+    # A solid class strip along the top of every panel, same red/blue as the sample colouring.
+    for a in ax:
+        a.set_ylim(-.5, 63.5 + 4)
+        a.axhspan(64.2, 66.6, xmin=0, xmax=split / len(y), color=RED, lw=0, zorder=3)
+        a.axhspan(64.2, 66.6, xmin=split / len(y), xmax=1, color=BLUE, lw=0, zorder=3)
+        a.text(split * .5, 64.9, "harmful", ha="center", va="center", color="white",
+               fontweight="bold", fontsize=8.5, zorder=4)
+        a.text(split + (len(y) - split) * .5, 64.9, "benign", ha="center", va="center",
+               color="white", fontweight="bold", fontsize=8.5, zorder=4)
 
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     fig.savefig(args.out, bbox_inches="tight")

@@ -41,6 +41,8 @@ from probe_io import load_probe
 
 R06 = os.path.join(HERE, "results", "06-qwen35-inscorer-probe")
 RB = os.path.join(R06, "rebaseline_2026-07-24")
+R08 = os.path.join(HERE, "results", "08-agentic-cle-pilot")   # these plots are about the CLE
+                                                                 # intervention, not the 06 probe fit
 RED, BLUE = "#D7263D", "#0072B2"
 plt.rcParams.update({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False,
                      "figure.dpi": 130})
@@ -53,7 +55,7 @@ def main():
     ap.add_argument("--val-acts", default=os.path.join(RB, "val_acts.npz"))
     ap.add_argument("--layer", type=int, default=25, help="a layer inside the intervened band")
     ap.add_argument("--quantile", type=float, default=0.5)
-    ap.add_argument("--out", default=os.path.join(R06, "steering_pca.png"))
+    ap.add_argument("--out", default=os.path.join(R08, "steering_pca.png"))
     args = ap.parse_args()
     L = args.layer
 

@@ -111,6 +111,9 @@ upload MANIFEST.json                     MANIFEST.json
 upload qwen35_inscorer_test_acts.npz     test_acts.npz
 upload qwen35_inscorer_val_acts.npz      val_acts.npz
 upload qwen35_inscorer_experiment.json   inscorer_experiment.json
+# Carries the fitted probe (svm_w / svm_bias / dirs) as well as per-layer scores -- without it
+# the run's own probe cannot be canonicalized, so the activations lose their matching reference.
+upload qwen35_inscorer_experiment_scores.npz  scores_and_probe.npz
 
 note test_acts.npz \
   "In-context activations for AgentHarm test_public — the HELD-OUT evaluation set." \
@@ -130,6 +133,15 @@ note inscorer_experiment.json \
   "Run summary: per-layer AUCs, val-CV layer selection, refusal join, test ids." \
   "Note     : val-CV layer selection is unreliable at N=64 (many layers reach CV AUC" \
   "           1.000). Prefer the selection-free mean-over-layers headline."
+
+note scores_and_probe.npz \
+  "The probe this run fitted, plus its per-layer scores on test." \
+  "Contents : svm_w (64, 5120) | svm_bias (64,) | dirs (64, 5120) unit mean-diff" \
+  "           md_h/svm_h (176, 64), md_b/svm_b (176, 64) per-layer test scores" \
+  "           ref (176,) model refusal on harmful | ids (176,)" \
+  "Careful  : here 'svm_b' means SVM scores on BENIGN rows, not the bias (that is" \
+  "           'svm_bias'). Canonical w/b artifacts avoid this collision — build them" \
+  "           with experiments/probe_io.py --scores this-file --val-acts val_acts.npz"
 
 note MANIFEST.json \
   "Machine-readable index of this folder: sizes, sha256s, and the read convention."

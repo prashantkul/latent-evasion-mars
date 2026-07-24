@@ -109,11 +109,31 @@ def behaviour_block(harmful_glob, benign_glob):
     return out or None
 
 
-def load_eval_inputs(args, w, b):
+def select_layers(X, layers):
+    """Line the activation cache up with the probe's OWN layer list.
+
+    A probe is a stack of independent per-layer (w, b) pairs and need not cover all of them --
+    a teammate may fit only a band. The cache always holds every layer, so the two are aligned
+    through `layers`, never positionally: a 1-based or embedding-included list has the right
+    length and the wrong meaning, and would otherwise score against the wrong layers in silence.
+    """
+    n = X.shape[1]
+    bad = [int(l) for l in layers if not 0 <= l < n]
+    if bad:
+        raise SystemExit(f"probe covers layer(s) {bad} but the cache has {n} layers — check the "
+                         "probe's layer_index convention (0-based over blocks, embedding skipped)")
+    if len(layers) == n and np.array_equal(layers, np.arange(n)):
+        return X
+    print(f"        probe covers {len(layers)}/{n} layers: "
+          f"{layers[0]}..{layers[-1]}; scoring those, mean-over-layers is over them")
+    return X[:, layers, :]
+
+
+def load_eval_inputs(args, w, b, layers):
     if args.acts:
         z = np.load(args.acts, allow_pickle=True)
         X, y = z["X"], z["y"].astype(int)
-        return probe_score(X, w, b), y, (z["ref"] if "ref" in z.files else None)
+        return probe_score(select_layers(X, layers), w, b), y, (z["ref"] if "ref" in z.files else None)
     z = np.load(args.scores, allow_pickle=True)
     if "s" in z.files and "y" in z.files:
         return z["s"], z["y"].astype(int), (z["ref"] if "ref" in z.files else None)
@@ -124,6 +144,9 @@ def load_eval_inputs(args, w, b):
     key = {"svm": "svm", "single_direction": "md"}[args.probe_type]
     sh, sb = z[f"{key}_h"], z[f"{key}_b"]
     s = np.concatenate([sh, sb])
+    if s.shape[1] != len(layers):
+        raise SystemExit(f"pre-computed scores cover {s.shape[1]} layers but the probe covers "
+                         f"{len(layers)} — re-score from --acts instead")
     if args.probe_type == "single_direction":
         s = s + b
     y = np.concatenate([np.ones(len(sh)), np.zeros(len(sb))]).astype(int)
@@ -147,7 +170,7 @@ def main():
     print(f"probe   {args.probe}  type={meta['probe_type']}  layers={len(layers)}  hidden={w.shape[1]}")
     print(f"        read_position: {meta['read_position'][:88]}...")
 
-    s, y, ref = load_eval_inputs(args, w, b)
+    s, y, ref = load_eval_inputs(args, w, b, layers)
     pb = probe_block(s, y, ref)
     bh = behaviour_block(args.harmful_log, args.benign_log)
 

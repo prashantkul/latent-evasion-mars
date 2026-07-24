@@ -152,7 +152,13 @@ def main():
 
     qwen35_inspect_patch.install()
     model = get_model(f"hf/{args.model}", device=args.device, enable_thinking=False)
-    cfg = GenerateConfig(max_tokens=args.max_tokens, max_connections=args.max_connections)
+    # Pin decoding explicitly to match the frozen vLLM run (temperature 0.0, seed 0). Leaving
+    # these unset lets the model's own generation_config supply defaults -- Qwen ships sampling
+    # defaults -- so an unpinned run may silently sample while the baseline it is read against
+    # did not. Control and attacked share whatever is set here, so this does not affect an
+    # already-collected comparison; it removes a confound from the next one.
+    cfg = GenerateConfig(max_tokens=args.max_tokens, max_connections=args.max_connections,
+                         temperature=0.0, seed=0)
     layers_mod = hf_layers(model)
     sel = parse_layers(args.layers, len(layers_mod))
 

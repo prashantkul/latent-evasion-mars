@@ -151,14 +151,15 @@ def main():
         raise SystemExit("--margin-quantile needs --val-acts (val only; test stays held out)")
 
     qwen35_inspect_patch.install()
-    model = get_model(f"hf/{args.model}", device=args.device, enable_thinking=False)
-    # Pin decoding explicitly to match the frozen vLLM run (temperature 0.0, seed 0). Leaving
-    # these unset lets the model's own generation_config supply defaults -- Qwen ships sampling
-    # defaults -- so an unpinned run may silently sample while the baseline it is read against
-    # did not. Control and attacked share whatever is set here, so this does not affect an
-    # already-collected comparison; it removes a confound from the next one.
-    cfg = GenerateConfig(max_tokens=args.max_tokens, max_connections=args.max_connections,
-                         temperature=0.0, seed=0)
+    # do_sample=False is a MODEL ARG, not a GenerateConfig field. Inspect's hf provider defaults
+    # do_sample to True, so an unspecified run SAMPLES -- while the frozen vLLM baseline is greedy
+    # (temperature 0). Setting temperature=0.0 instead does not work: transformers rejects it
+    # ("has to be a strictly positive float ... set do_sample=False"), which killed a test_public
+    # run after 1.5 h. Greedy also removes sampling noise from the control-vs-attacked comparison.
+    model = get_model(f"hf/{args.model}", device=args.device, enable_thinking=False,
+                      do_sample=False)
+    # No temperature here: with do_sample=False it is unused, and transformers errors on 0.0.
+    cfg = GenerateConfig(max_tokens=args.max_tokens, max_connections=args.max_connections)
     layers_mod = hf_layers(model)
     sel = parse_layers(args.layers, len(layers_mod))
 

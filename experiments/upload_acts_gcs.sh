@@ -12,9 +12,48 @@
 set -euo pipefail
 
 BUCKET=${BUCKET:-probe-activations-123213e}
-PREFIX=${PREFIX:-qwen35-27b/incontext}
+# One folder per run. Re-baselining is the expected workflow, so a new run must not clobber the
+# activations an earlier baseline was measured against.
+RUN=${RUN:-$(date -u +%Y-%m-%d)}
+PREFIX=${PREFIX:-qwen35-27b/in-context/$RUN}
 SRC=${SRC:-/workspace/acts_cache}
 : "${GCS_TOKEN:?GCS_TOKEN not set — mint one on the Mac with gcloud auth print-access-token}"
+
+STAMP=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+GITSHA=$(git -C /workspace/latent-evasion-mars rev-parse --short HEAD 2>/dev/null || echo unknown)
+TVER=$(python3 -c "import transformers;print(transformers.__version__)" 2>/dev/null || echo "?")
+IVER=$(python3 -c "import inspect_ai;print(inspect_ai.__version__)" 2>/dev/null || echo "?")
+
+# Human-readable sidecar: `foo.npz` gets `foo.npz.txt` right next to it, so anyone browsing the
+# bucket can tell what a file is and when it was made without cloning the repo or parsing JSON.
+note() {   # note <object-name> <one-line description> <extra lines...>
+    local obj=$1 desc=$2; shift 2
+    { echo "$obj"
+      echo "$(printf '%*s' ${#obj} '' | tr ' ' '=')"
+      echo
+      echo "$desc"
+      echo
+      echo "Produced   : $STAMP"
+      echo "By         : experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py"
+      echo "Repo commit: $GITSHA  (github.com/prashantkul/latent-evasion-mars)"
+      echo "Machine    : RunPod H100 80GB, transformers $TVER, inspect_ai $IVER"
+      echo "Model      : Qwen/Qwen3.5-27B, bf16, enable_thinking=False"
+      echo
+      for line in "$@"; do echo "$line"; done
+      echo
+      echo "Read convention (activations are silently miscomparable without it):"
+      echo "  - post-instruction token (-1), read IN-CONTEXT inside the Inspect scorer, so the"
+      echo "    activation comes from the model's real agentic context (AgentHarm agent system"
+      echo "    prompt + tool schemas), not an offline reconstruction."
+      echo "  - layer index 0-based over transformer blocks, embedding layer skipped."
+      echo
+      echo "WARNING: not interchangeable with 05's qwen35_test_acts.npz, which came from the"
+      echo "INVALID offline path (it omitted the agent system prompt)."
+      echo
+      echo "See also MANIFEST.json (sha256s + machine-readable metadata) and experiments/BASELINES.md."
+    } > "/tmp/$(basename "$obj").txt"
+    upload "/tmp/$(basename "$obj").txt" "$obj.txt"
+}
 
 upload() {   # upload <local-path> <object-name>
     local f=$1 obj=$2 sz sess
@@ -72,4 +111,27 @@ upload MANIFEST.json                     MANIFEST.json
 upload qwen35_inscorer_test_acts.npz     test_acts.npz
 upload qwen35_inscorer_val_acts.npz      val_acts.npz
 upload qwen35_inscorer_experiment.json   inscorer_experiment.json
+
+note test_acts.npz \
+  "In-context activations for AgentHarm test_public — the HELD-OUT evaluation set." \
+  "Contents : X (352, 64, 5120) float32 | y (352,) 1=harmful 0=benign | ids (352,)" \
+  "           352 rows = 176 harmful + 176 benign ('benign twins'), all 64 layers." \
+  "Purpose  : re-evaluate a new probe on CPU in seconds instead of repeating a GPU" \
+  "           agentic run. All layers are kept because a new probe may live anywhere." \
+  "Use      : uv run python experiments/eval_probe.py --probe <stem> --acts test_acts.npz"
+
+note val_acts.npz \
+  "In-context activations for the AgentHarm val split — the probe TRAINING set." \
+  "Contents : X (64, 64, 5120) float32 | y (64,) — 32 harmful / 32 benign." \
+  "Purpose  : fit a new probe on the same context the test set was read in." \
+  "Guardrail: train on THIS file only. test_acts.npz must stay held out."
+
+note inscorer_experiment.json \
+  "Run summary: per-layer AUCs, val-CV layer selection, refusal join, test ids." \
+  "Note     : val-CV layer selection is unreliable at N=64 (many layers reach CV AUC" \
+  "           1.000). Prefer the selection-free mean-over-layers headline."
+
+note MANIFEST.json \
+  "Machine-readable index of this folder: sizes, sha256s, and the read convention."
+
 echo "done → gs://$BUCKET/$PREFIX/"

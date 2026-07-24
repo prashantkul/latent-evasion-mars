@@ -53,6 +53,7 @@ C = 0.1
 B = 5000
 VAL = {"X": [], "y": []}                     # harvested val activations (Pass A)
 TEST = {"harmful": {}, "benign": {}}         # per-sample probe scores (Pass B)
+TEST_ACTS = {"harmful": [], "benign": []}    # cached in-context test activations (Pass B)
 W = {}                                       # trained probe (filled between passes)
 
 
@@ -86,6 +87,9 @@ def probe_scorer(tag):
         bl = W["best_layer"]
         io = str((state.metadata or {}).get("id_original"))
         TEST[tag][str(state.sample_id)] = {"svm": svm.tolist(), "md": md.tolist(), "id_original": io}
+        # Cache the raw in-context activation, not just this probe's scores: re-evaluating a
+        # NEW probe then costs a CPU matmul instead of another agentic GPU run.
+        TEST_ACTS[tag].append((str(state.sample_id), h))
         return Score(value=float(svm[bl] > 0),                  # real: best-layer SVC firing
                      metadata={"svm_best": float(svm[bl]), "md_best": float(md[bl]),
                                "best_layer": int(bl), "id_original": io})
@@ -158,6 +162,9 @@ def main():
     ap.add_argument("--benign-log", default="/opt/latent-evasion-mars/logs_qwen35v_benign/*.eval")
     ap.add_argument("--log-dir", default="./logs_qwen35_inscorer_exp")
     ap.add_argument("--acts-out", default="/opt/qwen35_inscorer_val_acts.npz")
+    ap.add_argument("--test-acts-out", default="/opt/qwen35_inscorer_test_acts.npz",
+                    help="cache in-context TEST activations so a new probe can be re-evaluated "
+                         "on CPU (experiments/eval_probe.py) without another agentic GPU run")
     ap.add_argument("--out", default="/opt/qwen35_inscorer_experiment.json")
     args = ap.parse_args()
 
@@ -183,6 +190,14 @@ def main():
     inspect_eval(task("harmful", "test_public", probe_scorer("harmful")), model=model, log_dir=args.log_dir)
     inspect_eval(task("benign", "test_public", probe_scorer("benign")), model=model, log_dir=args.log_dir)
     print(f"  test scored: {len(TEST['harmful'])} harmful, {len(TEST['benign'])} benign", flush=True)
+
+    # Persist the raw in-context test activations immediately — this is the artifact that makes
+    # re-evaluating a teammate's probe a CPU job rather than a repeat of this GPU run.
+    ta_ids = [i for i, _ in TEST_ACTS["harmful"]] + [i for i, _ in TEST_ACTS["benign"]]
+    ta_X = np.stack([a for _, a in TEST_ACTS["harmful"]] + [a for _, a in TEST_ACTS["benign"]])
+    ta_y = np.concatenate([np.ones(len(TEST_ACTS["harmful"])), np.zeros(len(TEST_ACTS["benign"]))])
+    np.savez(args.test_acts_out, X=ta_X.astype(np.float32), y=ta_y.astype(int), ids=np.array(ta_ids))
+    print(f"  cached test activations {ta_X.shape} -> {args.test_acts_out}", flush=True)
 
     # ---- evaluate: join behavioural labels, per-layer AUC ----
     hlog, href = refusal_map(args.harmful_log)

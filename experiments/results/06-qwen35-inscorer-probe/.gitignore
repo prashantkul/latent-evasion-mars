@@ -1,0 +1,3 @@
+
+# large regenerable GPU intermediate: cached in-context test activations (~460 MB)
+qwen35_inscorer_test_acts.npz

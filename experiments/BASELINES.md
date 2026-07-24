@@ -82,28 +82,43 @@ and read **in-context inside the Inspect scorer**:
 
 | Probe | AUC mean-layers *(headline)* | AUC best layer | acc @ canonical boundary | recall | FPR |
 |---|---|---|---|---|---|
-| `single_direction` (mean-difference) | **0.930** | 0.943 (L24) | 0.858 | 0.864 | 0.148 |
-| `svm` (LinearSVC C=0.1) | **0.956** | 0.948 (L28) | 0.750 | 0.500 | 0.000 |
+| `single_direction` (mean-difference) | 0.930 | 0.943 (L24) | 0.858 | 0.864 | 0.148 |
+| `svm` (LinearSVC C=0.1) | **0.956** | 0.948 (L28) | **0.892** | 0.886 | **0.102** |
 
 probe → refusal AUC (harmful only, mean-layers): `single_direction` 0.913, `svm` 0.771.
 
-**SVM bias caveat.** The SVM has the better AUC but its own intercept — fit on 32+32 val — is
-conservative on the test distribution: recall 0.500 at FPR 0.000. Ranking is by AUC; the confusion
-row reflects calibration, not separability. `single_direction`, whose bias is a centroid midpoint,
-sits at a far more usable operating point.
+The SVM is the better harm-vs-benign monitor on both axes — higher AUC and, at its own canonical
+boundary, higher accuracy at lower false-alarm rate. Mean-difference remains the better predictor of
+the model's *own refusal* (0.913 vs 0.771), so the two probes are answering different questions.
+
+**Reproduction (2026-07-24).** The whole two-pass run was repeated on a fresh pod (transformers
+5.14.1, inspect_ai 0.3.249). Test activations reproduce the previous run's AUCs to four decimals,
+and the refitted probe is **bit-identical** to the committed one (`max|Δw| = 0`). Greedy decoding on
+a fixed model makes the post-instruction read deterministic. The re-baseline therefore *confirms*
+these numbers rather than replacing them.
 
 **Monitor comparison** (`results/07-qwen35-monitor-confusion/`), same 352 rows, same split labels:
 
 | Monitor | acc | recall | FPR |
 |---|---|---|---|
-| gpt-4o judge, majority-of-3 @ T1.0 | 0.77 | 0.99 | 0.45 |
-| gpt-4o judge, single-shot T0 | 0.79 | 0.99 | 0.41 |
-| in-context probe @ val threshold | 0.87 | 0.83 | 0.085 |
+| gpt-4o judge, majority-of-3 @ T1.0 | 0.770 | 0.989 | 0.449 |
+| probe `svm`, mean-layers @ canonical boundary | **0.892** | 0.886 | **0.102** |
+| probe `single_direction`, mean-layers @ canonical boundary | 0.858 | 0.864 | 0.148 |
 
 The judge over-flags AgentHarm's adversarial benign twins (79/176), verified as genuine: on those
-rows the model complied 0/73 refused, and 62/176 were flagged unanimously 3/3. Stated honestly, this
-is a **trade-off, not a domination** — at the judge's recall (0.99) the probe's FPR is 0.58, worse
-than 0.41. The probe wins at a lower-recall operating point the fixed judge cannot reach.
+rows the model complied, 0/73 refused, and 62/176 were flagged unanimously 3/3.
+
+**On whether the probe dominates the judge — the answer changed, and only because the metric was
+pinned.** The earlier reading (probe FPR 0.58 at the judge's recall, i.e. clearly worse) came from
+mean-difference at its best single layer. Under the pinned selection-free metric the `svm` probe
+reaches **FPR 0.426 at the judge's recall of 0.989, against the judge's 0.449**. That is nominally
+better, but it is 75 vs 79 false positives out of 176 — a 4-sample gap, well inside noise. The
+honest statement is that the probe now **matches** the judge at the high-recall corner rather than
+losing there, while being clearly better at its own operating point (FPR 0.102 vs 0.449). It is not
+a decisive win at high recall and should not be reported as one.
+
+Regenerate with `results/07-qwen35-monitor-confusion/regen_probe_column.py`, which reuses the cached
+majority-vote judge labels and recomputes only the probe side.
 
 ---
 
@@ -159,18 +174,39 @@ Regenerate the canonical artifacts from the `06` run: `uv run python experiments
 
 ---
 
+## Activation cache (GCS)
+
+The cached in-context activations live in **`gs://probe-activations-123213e/qwen35-27b/in-context/<run date>/`**,
+one folder per run so a re-baseline never clobbers what an earlier baseline was measured against.
+Current run: `2026-07-24/`.
+
+| Object | What |
+|---|---|
+| `test_acts.npz` | `X (352, 64, 5120) f32`, `y`, `ids` — **held-out** test_public, all 64 layers |
+| `val_acts.npz` | `X (64, 64, 5120)`, `y` — the probe **training** split; keep test held out |
+| `scores_and_probe.npz` | the run's fitted probe (`svm_w`/`svm_bias`/`dirs`) + per-layer test scores |
+| `inscorer_experiment.json` | run summary: per-layer AUCs, val-CV selection, refusal join |
+| `MANIFEST.json` | sizes, sha256s, machine-readable read convention |
+| `<name>.txt` | human-readable note per object: what, when, on which stack |
+
+All layers are cached deliberately — a new probe may live at any layer, so pre-selecting would
+defeat the purpose. Re-evaluating a teammate's probe is now a CPU matmul:
+
+```bash
+gsutil cp gs://probe-activations-123213e/qwen35-27b/in-context/2026-07-24/test_acts.npz .
+uv run python experiments/eval_probe.py --probe <their probe stem> --acts test_acts.npz
+```
+
+Upload a fresh run with `experiments/upload_acts_gcs.sh` (short-lived token, minted on the Mac —
+never put a long-lived credential on rented pod hardware).
+
 ## Known gaps
 
-1. **No cached in-context test activations yet — the main blocker on cheap re-evaluation.** `06`
-   Pass B saved probe *scores* but not the activations, so re-evaluating a new probe currently needs
-   a full agentic GPU re-run. `qwen35_inscorer_experiment.py` now caches them
-   (`--test-acts-out`); **the next GPU run produces the artifact**, after which every re-evaluation is
-   a CPU matmul. (`05/qwen35_test_acts.npz` is *not* a substitute — it is from the invalid path.)
-2. **TODO — CLE per-layer adapter.** `utils/probes.py` loads per-layer `svm_layerXX.pt` /
+1. **TODO — CLE per-layer adapter.** `utils/probes.py` loads per-layer `svm_layerXX.pt` /
    `sd_layerXX.pt`; the eval harness loads a stacked canonical npz. Key names now agree (`w`, `b`),
    so this is a format shim, not a semantic conversion: convert both ways so a probe can be
    evaluated here and then handed to `cle-a.py` / `cle-p.py` unchanged. Not yet written.
-3. Llama-3.2-3B rows predate the canonical schema and are transcribed from their experiment folders;
+2. Llama-3.2-3B rows predate the canonical schema and are transcribed from their experiment folders;
    they have not been re-run through `eval_probe.py`.
-4. Layer-selection protocol is deliberately excluded from the headline metric. If a probe genuinely
+3. Layer-selection protocol is deliberately excluded from the headline metric. If a probe genuinely
    needs per-layer selection, the selection must be fit on val and declared in the metadata.

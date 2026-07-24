@@ -117,10 +117,15 @@ def load_eval_inputs(args, w, b):
     z = np.load(args.scores, allow_pickle=True)
     if "s" in z.files and "y" in z.files:
         return z["s"], z["y"].astype(int), (z["ref"] if "ref" in z.files else None)
-    # legacy 06 layout: per-probe harmful/benign score matrices, bias applied separately
+    # Legacy 06 layout: per-probe harmful/benign score matrices. The two probes are NOT stored
+    # the same way -- Pass B wrote svm as (h·w + bias) but mean-diff as a bare projection h·dir.
+    # Adding b to both double-counts the SVM bias and silently wrecks its confusion matrix, so
+    # only the mean-diff scores get the bias here.
     key = {"svm": "svm", "single_direction": "md"}[args.probe_type]
     sh, sb = z[f"{key}_h"], z[f"{key}_b"]
-    s = np.concatenate([sh, sb]) + b            # legacy scores are pre-bias
+    s = np.concatenate([sh, sb])
+    if args.probe_type == "single_direction":
+        s = s + b
     y = np.concatenate([np.ones(len(sh)), np.zeros(len(sb))]).astype(int)
     ref = np.concatenate([z["ref"], np.full(len(sb), np.nan)]) if "ref" in z.files else None
     return s, y, ref

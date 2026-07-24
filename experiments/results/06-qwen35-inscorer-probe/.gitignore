@@ -1,3 +1,7 @@
 
 # large regenerable GPU intermediate: cached in-context test activations (~460 MB)
 qwen35_inscorer_test_acts.npz
+
+# re-baseline run artifacts: large, regenerable, and mirrored in GCS
+rebaseline_*/test_acts.npz
+rebaseline_*/val_acts.npz

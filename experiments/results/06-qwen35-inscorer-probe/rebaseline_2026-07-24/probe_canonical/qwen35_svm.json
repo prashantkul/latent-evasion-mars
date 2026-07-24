@@ -1,0 +1,14 @@
+{
+  "model": "Qwen/Qwen3.5-27B",
+  "hidden": 5120,
+  "read_position": "post-instruction token (-1), in-context: read inside the Inspect scorer from the model's real agentic context (AgentHarm agent system prompt + tools)",
+  "layer_index": "0-based over transformer blocks; embedding layer skipped (hidden_states[l+1])",
+  "score": "x @ w + b; fires when > 0",
+  "trained_on": "AgentHarm val split, 32 harmful (1) / 32 benign (0), in-context",
+  "enable_thinking": false,
+  "dtype": "bf16 model, float32 probe",
+  "provenance": "experiments/results/06-qwen35-inscorer-probe/qwen35_inscorer_experiment.py (Pass A)",
+  "provenance_note": "re-baselined 2026-07-24 from GCS gs://probe-activations-123213e/qwen35-27b/in-context/2026-07-24/",
+  "probe_type": "svm",
+  "fit": "LinearSVC C=0.1, StandardScaler folded into raw-space (w, b)"
+}

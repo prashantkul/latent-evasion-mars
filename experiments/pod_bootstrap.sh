@@ -36,10 +36,14 @@ fi
 note "repo" "$REPO @ $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo MISSING)"
 
 # --- deps into system python (no venv: the hf provider must import in-process) ---
-python3 - <<'PY' 2>/dev/null || pip install -q inspect_ai inspect_evals transformers accelerate scikit-learn 2>&1 | tail -2
-import inspect_ai, inspect_evals, transformers, sklearn  # noqa: F401
+# `openai` is not optional here despite being an extra: AgentHarm's refusal and semantic judges are
+# gpt-4o, and Inspect builds them when the TASK is built, so a missing client kills the run at
+# startup -- after the 27B weights have loaded. Checking the key alone is not enough; a first pilot
+# died here with "OpenAI API requires optional dependencies".
+python3 - <<'PY' 2>/dev/null || pip install -q inspect_ai inspect_evals transformers accelerate scikit-learn openai 2>&1 | tail -2
+import inspect_ai, inspect_evals, transformers, sklearn, openai  # noqa: F401
 PY
-for mod in inspect_ai inspect_evals transformers sklearn; do
+for mod in inspect_ai inspect_evals transformers sklearn openai; do
     v=$(python3 -c "import $mod,sys;sys.stdout.write(getattr($mod,'__version__','?'))" 2>/dev/null) \
         && note "$mod" "$v" || { note "$mod" "MISSING"; fail=1; }
 done

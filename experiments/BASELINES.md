@@ -156,6 +156,14 @@ majority-vote judge labels and recomputes only the probe side.
   reconstruction is the exact failure that invalidated `05`.
 - Agentic probe evaluation requires Inspect's **`hf` provider (in-process)** — that is what puts
   `hidden_states` within reach of the scorer. vLLM yields behavioural metrics only.
+- **The frozen behavioural four metrics are `test_public` on the vLLM provider.** Anything run on
+  `val` or on the `hf` provider differs from them in *two* ways at once, so a gap cannot be
+  attributed to either one. Concretely: the agentic CLE pilot's `--beta 0` control (hf, val) is a
+  valid control **for the attacked run beside it** — same provider, same split, same code path,
+  one number changed — but it is *not* a check against the table above, and disagreeing with the
+  table would not demonstrate a provider effect. Placing agentic CLE numbers next to the frozen
+  baseline requires a `test_public` run. Isolating the provider would require a matched pair on
+  one split; no val-split vLLM run exists today.
 
 ---
 

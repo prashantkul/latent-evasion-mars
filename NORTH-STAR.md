@@ -66,6 +66,36 @@ on representations drifting across generated tokens. That drift is largest in lo
 trajectories, which only exist in our setting. So the measurement that decides whether contribution
 (2) is worth building is an *agentic* measurement, and it is ours to make. See Q2.
 
+### Our comparator: CLE-P vs CLE-A on AgentHarm
+
+We do not need chat-mode ground truth to have a baseline. The original code ships **two attack
+schedules**, and both are ours to evaluate agentically:
+
+| | CLE-P (projective) | CLE-A (additive) |
+|---|---|---|
+| displacement | recomputed every position, every step | measured once at the last prompt token, then frozen |
+| lands the score at | exactly `−margin` (β=1) | `−margin` at the calibration token; elsewhere wherever the fixed vector puts it |
+| pre-pass | none | one calibration forward per prompt |
+
+Note these are *intervention schedules*, not probe types — probe type (`svm` /
+`single_direction`) is a separate axis, held fixed across the comparison.
+
+**Why this is the right in-lane experiment.** The paper's headline efficiency claim is that a
+single fixed post-instruction perturbation sustains evasion *through generation*, so no
+reprojection is needed. That was established single-turn. An AgentHarm rollout is many generate
+calls with a context that grows as tool results accumulate, so a frozen delta has far more room to
+go stale. **If CLE-A degrades relative to CLE-P agentically, that is a property the paper's setting
+cannot exhibit** — and it is exactly the evidence that would motivate contribution (2).
+
+So this single comparison answers Q2 behaviourally, and `experiments/cle_a_agentic_design.md` §7
+gives the mechanism alongside it: log `w·h + b` at the last position of each turn under `sample`
+cadence and watch it drift away from `−margin`. That drift curve is the token-level measurement Q2
+asks for, delivered as the explanation for the behavioural result rather than as a separate study.
+
+**Status:** CLE-A is **not implemented** agentically (~1 day; see the design note for why it does
+not drop in as a flag, and for the `--recalibrate {sample,turn}` decision). `agentic_cle.py` is
+CLE-P only, so the agentic baseline is partial until this lands.
+
 ## Plan, in order
 
 1. **Geometric margin rule on the paper's own frozen post-instruction probes.** Cheapest change,
@@ -139,8 +169,9 @@ Qwen3.5-27B while the chat-mode ground-truth comparison does not yet exist. A nu
 candidate explanations at once — margin rule, agentic setting, layer band, and a model the paper
 never covered — with no baseline to separate them. Step (1) is a **dependency owned by teammates**,
 not work for us to pick up; the correct response to being blocked on it is to name the dependency.
-What we *can* do in lane is build a comparator inside the agentic setting: run two margin rules
-against each other on the same model and harness, which isolates the rule without leaving our scope.
+The in-lane comparator we actually have is **CLE-P vs CLE-A on the same agentic harness** — two
+attack schedules the original code already ships, holding probe, margin rule and layers fixed.
+Reaching for an out-of-lane baseline was the error; the baseline was in the repo.
 
 **D3 — Metric-family confusion at the handover.** The contribution's success criterion is ASR +
 MMLU against the paper's numbers, and that is measured in chat mode by teammates. AgentHarm's four

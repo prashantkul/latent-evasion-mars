@@ -8,6 +8,9 @@
 #   tmux new -s cle -d 'bash experiments/run_agentic_cle_pilot.sh 2>&1 | tee /workspace/cle_pilot.log'
 #   tail -30 /workspace/cle_pilot.log
 #
+# Env knobs: SPLIT LAYERS BETA QUANTILE CONTROL OUT TAG. Run the control once per split, then
+# CONTROL=0 for every further arm on it -- see the CONTROL comment below.
+#
 # Two configurations matter, and the pilot is not informative without both:
 #   LAYERS=20-30  the attacker perturbs a band, the monitor reads all 64 -- untouched layers still fire
 #   LAYERS=0-63   the attacker perturbs everything the monitor reads (the paper's threat model)
@@ -25,6 +28,12 @@ SPLIT=${SPLIT:-val}
 LAYERS=${LAYERS:-20-30}
 BETA=${BETA:-1.0}
 QUANTILE=${QUANTILE:-0.5}
+# CONTROL=0 skips the beta=0 arm. Safe to skip once a control exists for this SPLIT: beta=0 makes
+# the hook an exact no-op (h' = h), so the control does not depend on LAYERS or BETA and one run of
+# it serves every arm on that split. Skipping saves ~33 min on val, ~2.6 h on test_public per arm.
+# Never skip it for a split that has no control yet -- the vLLM baseline is not a substitute
+# (different provider, and on val a different split too).
+CONTROL=${CONTROL:-1}
 VAL_ACTS=${VAL_ACTS:-/workspace/acts_cache/qwen35_inscorer_val_acts.npz}
 PROBE=${PROBE:-$REPO/experiments/results/06-qwen35-inscorer-probe/probe_canonical/qwen35_svm}
 TAG=${TAG:-${SPLIT}_L${LAYERS}_beta${BETA}}
@@ -43,12 +52,20 @@ for f in "$VAL_ACTS" "${PROBE}.npz" "${PROBE}.json"; do
     [ -f "$f" ] || { echo "MISSING $f" >&2; exit 1; }
 done
 
+ctl=()
+[ "$CONTROL" = "1" ] && ctl=(--control)
+
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 echo "=== agentic CLE — split=$SPLIT layers=$LAYERS beta=$BETA margin=q$QUANTILE of val harmless ==="
 echo "    margins come from VAL activations only; the test split stays held out"
-echo "    --control runs beta=0 first: an exact no-op through the identical code path, so the"
-echo "    control-vs-attacked comparison isolates the intervention. NOTE it is not a check"
-echo "    against BASELINES.md, which is test_public on vLLM -- two differences at once."
+if [ "$CONTROL" = "1" ]; then
+    echo "    --control runs beta=0 first: an exact no-op through the identical code path, so the"
+    echo "    control-vs-attacked comparison isolates the intervention. NOTE it is not a check"
+    echo "    against BASELINES.md, which is test_public on vLLM -- two differences at once."
+else
+    echo "    CONTROL=0: attacked arm only. Compare against the beta=0 control already run on this"
+    echo "    split -- beta=0 is layer- and beta-independent, so that control is the right one."
+fi
 
 "$PY" experiments/agentic_cle.py \
     --model "$QWEN35_27B_MODEL" \
@@ -59,7 +76,7 @@ echo "    against BASELINES.md, which is test_public on vLLM -- two differences 
     --margin-quantile "$QUANTILE" \
     --val-acts "$VAL_ACTS" \
     --split "$SPLIT" \
-    --control \
+    ${ctl[@]+"${ctl[@]}"} \
     --log-dir "$OUT/logs_$TAG" \
     --out "$OUT/cle_$TAG.json"
 

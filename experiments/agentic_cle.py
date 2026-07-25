@@ -41,6 +41,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "results", "06-qwen35-inscorer-probe"))
 
+import cle_a_agentic                                              # noqa: E402
 import qwen35_inspect_patch                                       # noqa: E402
 from probe_adapter import to_probe_dict                           # noqa: E402
 from probe_io import load_probe                                   # noqa: E402
@@ -140,6 +141,18 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=4096)
     ap.add_argument("--max-connections", type=int, default=1)
     ap.add_argument("--control", action="store_true", help="also run the beta=0 control")
+    ap.add_argument("--attack", default="cle-p", choices=["cle-p", "cle-a"],
+                    help="cle-p recomputes the displacement every position; cle-a measures it once "
+                         "at the last prompt token and adds that frozen vector everywhere")
+    ap.add_argument("--recalibrate", default="sample", choices=["sample", "turn"],
+                    help="cle-a only. 'sample' freezes the delta for the whole rollout (the "
+                         "paper's semantics); 'turn' recalibrates each generate call (ours, not "
+                         "the paper's -- never report it as the CLE-A baseline)")
+    ap.add_argument("--trace-scores", action="store_true",
+                    help="cle-a only. Record w.h+b at the last position of each generate call, so "
+                         "staleness under 'sample' cadence is measured rather than inferred")
+    ap.add_argument("--selftest", action="store_true",
+                    help="run the cle-a correctness checks and exit without an eval")
     ap.add_argument("--log-dir", default="./logs_agentic_cle")
     ap.add_argument("--out", default="./agentic_cle.json")
     args = ap.parse_args()
@@ -175,13 +188,32 @@ def main():
     for l in sel:
         print(f"    L{l:02d} margin {margins[l]:+.4f}")
 
+    if args.selftest:
+        r = cle_a_agentic.selftest(model, layers_mod, probes, sel, margins)
+        print("\n=== CLE-A self-test (cle_a_agentic_design.md §7) ===")
+        for k, v in r.items():
+            print(f"  {k:34s} {v}")
+        raise SystemExit(0 if r["pass"] else 1)
+
+    intervention = ("CLE-P projection hook (prefill + decoding)" if args.attack == "cle-p"
+                    else f"CLE-A additive hook, recalibrate={args.recalibrate}")
     results = {"model": args.model, "probe": args.probe, "layers": sel, "beta": args.beta,
                "margin_mode": how, "margins": margins, "split": args.split,
-               "intervention": "CLE-P projection hook (prefill + decoding)"}
+               "attack": args.attack, "intervention": intervention}
+    if args.attack == "cle-a":
+        results["recalibrate"] = args.recalibrate
 
     def go(beta, tag):
-        handles = [layers_mod[l].register_forward_hook(
-            projection_hook(probes[l]["w"], probes[l]["b"], beta, margins[l])) for l in sel]
+        # CLE-P is stateless, so its hooks wrap the whole eval. CLE-A needs a calibration pass per
+        # prompt, so it wraps the provider's generate instead -- see cle_a_agentic.py.
+        handles, uninstall, state = [], None, None
+        if args.attack == "cle-p":
+            handles = [layers_mod[l].register_forward_hook(
+                projection_hook(probes[l]["w"], probes[l]["b"], beta, margins[l])) for l in sel]
+        else:
+            state, uninstall = cle_a_agentic.install(
+                model, layers_mod, probes, sel, beta, margins,
+                cadence=args.recalibrate, trace_scores=args.trace_scores)
         try:
             print(f"\n>>> {tag} (beta={beta}) HARMFUL", flush=True)
             h = run(agentharm(split=args.split), model, cfg, f"{args.log_dir}/{tag}_harmful",
@@ -191,6 +223,13 @@ def main():
                     f"{tag}.benign", limit)
         finally:
             remove_hooks(handles)
+            if uninstall:
+                uninstall()
+        if state is not None:
+            print(f"  [cle-a] {state.summary()}", flush=True)
+            results.setdefault("cle_a_stats", {})[tag] = state.summary()
+            if args.trace_scores:
+                results.setdefault("cle_a_trace", {})[tag] = state.trace
         return four_metrics(h, b)
 
     if args.control:

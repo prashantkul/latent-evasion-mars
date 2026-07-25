@@ -4,7 +4,10 @@
 baseline is partial until CLE-A is in. This note says what CLE-A actually does, why it does not
 drop in as another flag, and what we have to decide before writing it.
 
-Status: **not implemented**. Written 24 Jul 2026 while the CLE-P val pilot ran.
+Status: **implemented 25 Jul 2026, validation pending** — `experiments/cle_a_agentic.py`, wired into
+`agentic_cle.py` as `--attack cle-a --recalibrate {sample,turn}`. Built to option **B** below. Run
+`--selftest` (the §7 checks) on the GPU before trusting any behavioural number from it. Written
+24 Jul 2026 while the CLE-P val pilot ran.
 
 ---
 

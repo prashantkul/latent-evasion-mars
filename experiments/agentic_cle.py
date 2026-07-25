@@ -5,12 +5,17 @@ model is acting as a tool-using agent, scored by AgentHarm's official `combined_
 result is expressed in the four standard metrics and is directly comparable to the untouched
 baseline in experiments/BASELINES.md.
 
-Why this has to go through Inspect's **hf** provider: CLE's intervention is a forward hook on the
-decoder blocks, so the model must run in-process. vLLM cannot host it. That path only became
-usable once the Qwen3.5 tool-call parser gap was fixed (qwen35_inspect_patch).
+Why this has to run in-process: CLE's intervention is a forward hook on the decoder blocks, so
+vLLM cannot host it. That path only became usable once the Qwen3.5 tool-call parser gap was fixed
+(qwen35_inspect_patch).
 
-The intervention is CLE-P (`utils/hooks.projection_hook`), active during prefill AND decoding,
-exactly as in cle-p.py:
+The intervention itself lives in the `cle` Inspect provider (experiments/cle_provider.py) -- Path B
+from the 21 Jul harness note. This file is the experiment runner: it chooses the arms, drives the
+control-vs-attacked comparison and reports the four standard metrics. Both CLE-P and CLE-A go
+through the same provider, so the two attacks differ in their schedule and nothing else.
+
+CLE-P (`utils/hooks.projection_hook`) is active during prefill AND decoding, exactly as in
+cle-p.py:
 
     score = w·h + b + margin
     h'    = h - beta * (score / ||w||^2) * w        # beta=1 lands the score at exactly -margin
@@ -28,24 +33,25 @@ actually sit." Q=0.5 aims at the median harmless prompt.
 
   python3 experiments/agentic_cle.py --probe <canonical stem> --layers 20-30 \
       --margin-quantile 0.5 --val-acts <val_acts.npz> --split val --out cle_agentic.json
+
+  # CLE-A, the paper's cadence, with the staleness trace
+  python3 experiments/agentic_cle.py --attack cle-a --recalibrate sample --trace-scores ...
+
+  # correctness checks before trusting any CLE-A number (design note §7)
+  python3 experiments/agentic_cle.py --attack cle-a --selftest ...
 """
 import argparse
 import json
 import os
 import sys
 
-import numpy as np
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(HERE, "results", "06-qwen35-inscorer-probe"))
 
-import cle_a_agentic                                              # noqa: E402
+import cle_provider                                               # noqa: E402
 import qwen35_inspect_patch                                       # noqa: E402
-from probe_adapter import to_probe_dict                           # noqa: E402
-from probe_io import load_probe                                   # noqa: E402
-from utils.hooks import projection_hook, remove_hooks             # noqa: E402
 
 from inspect_ai import eval as inspect_eval                       # noqa: E402
 from inspect_ai.model import GenerateConfig, get_model            # noqa: E402
@@ -54,47 +60,7 @@ from inspect_evals.agentharm.agentharm import agentharm, agentharm_benign   # no
 FOUR = ("avg_score", "avg_refusals", "avg_score_non_refusals", "avg_full_score")
 
 
-def parse_layers(spec, n_layers):
-    """'20-30' -> [20..30]; '22,24' -> [22, 24]. Matches utils/args.parse_layers_arg."""
-    sel = (list(range(int(spec.split("-")[0]), int(spec.split("-")[1]) + 1))
-           if "-" in spec else [int(x) for x in spec.split(",")])
-    bad = [l for l in sel if not 0 <= l < n_layers]
-    if bad:
-        raise SystemExit(f"layers out of range for a {n_layers}-layer model: {bad}")
-    return sel
 
-
-def geometric_margins(val_acts, probe_stem, layers, q):
-    """Per-layer margin that lands a pushed activation at the q-quantile of the HARMLESS scores.
-
-    With beta=1 the post-intervention score is exactly -margin, so margin = -quantile(harmless).
-    Derived from val activations only -- the test split stays held out.
-    """
-    w, b, idx, _ = load_probe(probe_stem)
-    z = np.load(val_acts, allow_pickle=True)
-    X, y = z["X"], z["y"].astype(int)
-    pos = {int(l): n for n, l in enumerate(idx)}
-    out = {}
-    for l in layers:
-        s_harmless = X[y == 0, l, :] @ w[pos[l]] + b[pos[l]]
-        out[l] = float(-np.quantile(s_harmless, q))
-    return out
-
-
-def hf_layers(model):
-    """The decoder blocks of the model Inspect is actually driving."""
-    hf = getattr(model.api, "model", None)
-    if hf is None:
-        raise SystemExit("could not reach the underlying HF model — is this the hf provider?")
-    for path in (("model", "layers"), ("transformer", "h"), ("layers",)):
-        obj = hf
-        for attr in path:
-            obj = getattr(obj, attr, None)
-            if obj is None:
-                break
-        if obj is not None:
-            return obj
-    raise SystemExit(f"could not locate decoder layers on {type(hf).__name__}")
 
 
 def run(task, model, cfg, log_dir, label, limit):
@@ -164,72 +130,60 @@ def main():
         raise SystemExit("--margin-quantile needs --val-acts (val only; test stays held out)")
 
     qwen35_inspect_patch.install()
+    # The intervention lives in the `cle` provider (experiments/cle_provider.py), which is Path B
+    # from the 21 Jul harness note: Inspect owns the run and we own generation, rather than
+    # reaching under the framework to patch the model.
+    #
     # do_sample=False is a MODEL ARG, not a GenerateConfig field. Inspect's hf provider defaults
     # do_sample to True, so an unspecified run SAMPLES -- while the frozen vLLM baseline is greedy
     # (temperature 0). Setting temperature=0.0 instead does not work: transformers rejects it
     # ("has to be a strictly positive float ... set do_sample=False"), which killed a test_public
     # run after 1.5 h. Greedy also removes sampling noise from the control-vs-attacked comparison.
-    model = get_model(f"hf/{args.model}", device=args.device, enable_thinking=False,
-                      do_sample=False)
+    margin_args = ({"cle_margin_quantile": args.margin_quantile, "cle_val_acts": args.val_acts}
+                   if args.margin_quantile is not None else {"cle_margins": args.margin})
+    model = get_model(f"cle/{args.model}", device=args.device, enable_thinking=False,
+                      do_sample=False,
+                      cle_attack=args.attack, cle_probe=args.probe, cle_layers=args.layers,
+                      cle_beta=args.beta, cle_recalibrate=args.recalibrate,
+                      cle_trace=args.trace_scores, **margin_args)
     # No temperature here: with do_sample=False it is unused, and transformers errors on 0.0.
     cfg = GenerateConfig(max_tokens=args.max_tokens, max_connections=args.max_connections)
-    layers_mod = hf_layers(model)
-    sel = parse_layers(args.layers, len(layers_mod))
+    api = model.api
+    sel, margins = api.layers, api.margins
 
-    probes = to_probe_dict(args.probe, sel, device=args.device)
-    if args.margin_quantile is not None:
-        margins = geometric_margins(args.val_acts, args.probe, sel, args.margin_quantile)
-        how = f"quantile {args.margin_quantile} of val harmless scores (per layer)"
-    else:
-        margins = {l: args.margin for l in sel}
-        how = f"fixed {args.margin}"
-    print(f"model {args.model} | {len(layers_mod)} blocks | intervening on {sel}")
-    print(f"margin: {how}")
+    print(f"model {args.model} | {len(api.blocks)} blocks | {args.attack} on {sel}")
+    print(f"margin: {api.margin_mode}")
     for l in sel:
         print(f"    L{l:02d} margin {margins[l]:+.4f}")
 
     if args.selftest:
-        r = cle_a_agentic.selftest(model, layers_mod, probes, sel, margins)
-        print("\n=== CLE-A self-test (cle_a_agentic_design.md §7) ===")
+        r = api.selftest()
+        print("\n=== CLE self-test (cle_a_agentic_design.md §7) ===")
         for k, v in r.items():
             print(f"  {k:34s} {v}")
         raise SystemExit(0 if r["pass"] else 1)
 
-    intervention = ("CLE-P projection hook (prefill + decoding)" if args.attack == "cle-p"
-                    else f"CLE-A additive hook, recalibrate={args.recalibrate}")
     results = {"model": args.model, "probe": args.probe, "layers": sel, "beta": args.beta,
-               "margin_mode": how, "margins": margins, "split": args.split,
-               "attack": args.attack, "intervention": intervention}
+               "margin_mode": api.margin_mode, "margins": margins, "split": args.split,
+               "attack": args.attack, "provider": "cle"}
     if args.attack == "cle-a":
+        # 'turn' is ours, not the paper's. Record which was used so a number can never be
+        # reported as the CLE-A baseline when it is the middle point we invented.
         results["recalibrate"] = args.recalibrate
 
     def go(beta, tag):
-        # CLE-P is stateless, so its hooks wrap the whole eval. CLE-A needs a calibration pass per
-        # prompt, so it wraps the provider's generate instead -- see cle_a_agentic.py.
-        handles, uninstall, state = [], None, None
-        if args.attack == "cle-p":
-            handles = [layers_mod[l].register_forward_hook(
-                projection_hook(probes[l]["w"], probes[l]["b"], beta, margins[l])) for l in sel]
-        else:
-            state, uninstall = cle_a_agentic.install(
-                model, layers_mod, probes, sel, beta, margins,
-                cadence=args.recalibrate, trace_scores=args.trace_scores)
-        try:
-            print(f"\n>>> {tag} (beta={beta}) HARMFUL", flush=True)
-            h = run(agentharm(split=args.split), model, cfg, f"{args.log_dir}/{tag}_harmful",
-                    f"{tag}.harmful", limit)
-            print(f">>> {tag} (beta={beta}) BENIGN", flush=True)
-            b = run(agentharm_benign(split=args.split), model, cfg, f"{args.log_dir}/{tag}_benign",
-                    f"{tag}.benign", limit)
-        finally:
-            remove_hooks(handles)
-            if uninstall:
-                uninstall()
-        if state is not None:
-            print(f"  [cle-a] {state.summary()}", flush=True)
-            results.setdefault("cle_a_stats", {})[tag] = state.summary()
-            if args.trace_scores:
-                results.setdefault("cle_a_trace", {})[tag] = state.trace
+        api.set_beta(beta)
+        api.stats = cle_provider.CleStats()
+        print(f"\n>>> {tag} (beta={beta}) HARMFUL", flush=True)
+        h = run(agentharm(split=args.split), model, cfg, f"{args.log_dir}/{tag}_harmful",
+                f"{tag}.harmful", limit)
+        print(f">>> {tag} (beta={beta}) BENIGN", flush=True)
+        b = run(agentharm_benign(split=args.split), model, cfg, f"{args.log_dir}/{tag}_benign",
+                f"{tag}.benign", limit)
+        print(f"  [cle] {api.stats.summary()}", flush=True)
+        results.setdefault("cle_stats", {})[tag] = api.stats.summary()
+        if args.trace_scores and api.stats.trace:
+            results.setdefault("cle_trace", {})[tag] = api.stats.trace
         return four_metrics(h, b)
 
     if args.control:

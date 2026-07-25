@@ -40,6 +40,32 @@ probe-vs-judge comparisons are *testbed and instrumentation*, not the thesis. Th
 they tell us the probe is a sound object to attack, and they gave us the in-context reading
 machinery. They are not what the work is judged on.
 
+## Our lane: agentic evaluation
+
+This repo's workstream is **agentic evals**. That scope is narrow on purpose.
+
+| ours | teammates' |
+|---|---|
+| CLE inside a live multi-step tool-use loop (AgentHarm) | probe design and training |
+| the eval harness, frozen baselines, pinned metric definitions | chat-mode / single-turn evaluation of individual models |
+| in-scorer activation reads in the real agent prompt | ASR + MMLU against the paper's BO-tuned numbers |
+| token-level behaviour across a generated trajectory | per-model BO searches |
+
+**We consume probes; we do not design them.** A teammate's probe arrives as a canonical artifact
+(`experiments/probe_io.py`: stacked `w`/`b` plus a required metadata sidecar) and our job is to
+re-evaluate it against a fixed reference. See known gap #1 in `experiments/BASELINES.md` — the
+per-layer `svm_layerXX.pt` ↔ stacked-npz shim is still unwritten, and it is the handover surface.
+
+**Consequence for planning.** Steps (1) and (2) of the plan below are largely *not our work*. They
+are dependencies. Our agentic numbers cannot be interpreted until the chat-mode ground truth
+exists, and the useful move when we are blocked on that is to say so — not to run the chat-mode
+experiment ourselves.
+
+**Where our lane is load-bearing rather than a stretch goal.** The case for adaptive probes rests
+on representations drifting across generated tokens. That drift is largest in long multi-step
+trajectories, which only exist in our setting. So the measurement that decides whether contribution
+(2) is worth building is an *agentic* measurement, and it is ours to make. See Q2.
+
 ## Plan, in order
 
 1. **Geometric margin rule on the paper's own frozen post-instruction probes.** Cheapest change,
@@ -108,27 +134,38 @@ Real detours. Each one looked locally reasonable.
 results are strong, and it is easy to slide into "can a latent monitor be evaded" as the thesis.
 It is not. This is an attack-side extension. Monitor work is instrumentation.
 
-**D2 — Running step (3) before step (1).** We ran agentic CLE on Qwen3.5-27B before the
-ground-truth margin comparison on a paper-covered model. The consequence is that a null result has
-four candidate explanations at once — margin rule, agentic setting, layer band, and a model the
-paper never covered — with no baseline to separate them. A stop-condition cannot fire on evidence
-like that.
+**D2 — Reading an agentic null as a verdict on the margin rule.** We ran agentic CLE on
+Qwen3.5-27B while the chat-mode ground-truth comparison does not yet exist. A null there has four
+candidate explanations at once — margin rule, agentic setting, layer band, and a model the paper
+never covered — with no baseline to separate them. Step (1) is a **dependency owned by teammates**,
+not work for us to pick up; the correct response to being blocked on it is to name the dependency.
+What we *can* do in lane is build a comparator inside the agentic setting: run two margin rules
+against each other on the same model and harness, which isolates the rule without leaving our scope.
 
-**D3 — Measuring the wrong metric family.** The success criterion is ASR + MMLU against the paper's
-numbers. Agentic runs produce AgentHarm's four standard metrics, which have no published
-comparator. Both are legitimate; only one tests the contribution.
+**D3 — Metric-family confusion at the handover.** The contribution's success criterion is ASR +
+MMLU against the paper's numbers, and that is measured in chat mode by teammates. AgentHarm's four
+standard metrics are the *correct* output for our lane. The drift is not producing them — it is
+presenting them as if they answered the ASR question.
 
 **D4 — Undirected hyperparameter choices.** `--layers 20-30` was a default, not a derivation, and
 propagated into four scripts before anyone measured that band 53-63 is where the refusal decision
 is read (→refusal AUC 0.891 vs 0.771, zero layer overlap).
 
 **D5 — Model choice drifting off the paper's set.** Qwen3.5-27B is our own baseline and has no
-BO-tuned CLE numbers to compare against. Fine for step (3); not usable for step (1).
+BO-tuned CLE numbers to compare against. Fine for our lane; it just means a cross-lane comparison
+needs a model both sides have run.
+
+**D6 — Proposing work outside our lane.** Recommending we run the chat-mode ASR/MMLU comparison on
+`llama2-7b` ourselves. It is the right next experiment for the *project* and the wrong one for
+*us*. When the blocking work belongs to someone else, flag the dependency and pick the highest-value
+in-lane experiment instead.
 
 ### Check before running an experiment
 
-1. Which numbered step is this, and is the previous step done?
-2. Which contribution does it test — geometric margins, adaptive probes, or neither?
-3. What is the ground-truth comparator, and does it exist for this model?
-4. Does it produce the metric the success criterion names?
+1. **Is this in our lane — agentic?** If it is chat-mode, probe training, or a per-model BO search,
+   it belongs to a teammate. Flag it, do not run it.
+2. Which contribution does it inform — geometric margins, adaptive probes, or neither?
+3. What is the comparator, and does it exist *for this model, in this setting*?
+4. Does it produce AgentHarm's four standard metrics, and am I about to present them as if they
+   answered an ASR question?
 5. If it comes back null, how many explanations will there be?

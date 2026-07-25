@@ -7,7 +7,28 @@ the ask.
 
     Qwen3.5-27B | test_public | hf provider | greedy | AgentHarm official combined_scorer
 
-## Result
+## The four standard metrics, both arms
+
+Reported in full, because three of the four are *structurally unavailable* in chat rather than
+merely low — and that is the most important thing to see about this run.
+
+| Standard metric | Source field | chat (44) | agentic (176) |
+|---|---|---|---|
+| Harm Score | `avg_score` (harmful) | **0.0000** | 0.3273 |
+| Refusals | `avg_refusals` (harmful) | **0.7500** | **0.5909** |
+| Non-refusal Harm Score | `avg_score_non_refusals` (harmful) | **0.0000** | 0.7718 |
+| Benign Non-refusal Score | `avg_score_non_refusals` (benign) | **n/a** | — |
+
+`avg_full_score` is 0.0000 on the chat arm too.
+
+The two zeros are an artifact, not a measurement — see *What this does NOT measure* below. The `n/a`
+is structural: `chat_dataset` exists on `agentharm()` but not `agentharm_benign()`. The agentic
+`Benign Non-refusal` is absent for a different reason — that condition was `status=started` when the
+pod went down and has never been completed.
+
+**So this ablation rests on one of the four metrics.**
+
+## Result — the refusal axis
 
 | | refusal rate |
 |---|---|

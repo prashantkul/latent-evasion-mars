@@ -122,9 +122,11 @@ as plain chat and as an agentic task, hf provider, greedy, paired over behaviour
 12 behaviours refuse in chat only against 2 agentically only — McNemar exact **p = 0.0129**. Tools
 cut refusal on an unchanged request.
 
-*Refusal axis only.* Harm Score is 0.0000 for every chat sample: AgentHarm's grading functions score
-tool calls, and chat has none, so an agentic grader on a chat transcript returns zero by
-construction. `chat_dataset` is not available on `agentharm_benign()`, so there is no benign chat arm.
+*Refusal axis only, by the benchmark's own design.* AgentHarm passes `grading_module=None` for the
+chat split and `combined_scorer` short-circuits to a literal `score = 0.0`, so no grading function
+ever runs — Harm Score and Non-refusal Harm are constants carrying no information, not measurements.
+The chat split exists to measure refusal only. `chat_dataset` is also not available on
+`agentharm_benign()`, so there is no benign chat arm.
 
 **Probe monitor** — AgentHarm `test_public`, 176 harmful + 176 benign, probe trained on val (32+32)
 and read **in-context inside the Inspect scorer**:

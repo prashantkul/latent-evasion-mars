@@ -24,11 +24,28 @@ For the frozen reference numbers and how to re-evaluate a new probe against them
 
 Qwen behaviour baseline: Harm 36.6% · Refusals 58.5% · Non-refusal harm 84.6% · Benign 84.8%.
 
+## Agentic CLE — attacking the probe (Qwen3.5-27B)
+
+| Folder | What it shows | Headline |
+|--------|---------------|----------|
+| `08-agentic-cle-pilot/` | First CLE-P run inside a live AgentHarm eval, val split | **pilot, not a result** — the run was sampling, and its deltas are noise |
+| `09-cle-stage1-greedy/` | The same thing done greedily, plus the refusal-band arm | refusals move **0.0000** (L20-30) and **−0.0313** (L53-63) while benign capability falls 5–7 points — the intervention is pure cost at β=1 |
+
+## Framing (Qwen3.5-27B)
+
+| Folder | What it shows | Headline |
+|--------|---------------|----------|
+| `10-chat-vs-agentic/` | Same 44 harmful behaviours asked as chat vs as an agentic task, paired | **refusal 0.7500 → 0.5909** with tools; 12 behaviours flip toward compliance vs 2 away, McNemar p = 0.0129 |
+
 ## Reading order
 
 `00` → `01`–`03` establish the dissociation on the 3B. `04` compares monitors. `06` replicates the
 probe result on a second, far more capable model with a methodologically tighter design; `07` is its
 monitor comparison. `05` is kept for provenance and its behavioural numbers only.
+
+`08` → `09` are the attack line: `08` de-risked the harness, `09` is the first trustworthy
+measurement and it is a null on refusals. `10` is the control that gives those nulls a scale —
+reframing the task moves refusal by 12 of 44 behaviours where steering moved 0–1 samples of 32.
 
 Regenerate any plot: `uv run --with matplotlib --with numpy --with scikit-learn python <folder>/<plot>.py`
 Re-evaluate a probe: `uv run python ../eval_probe.py --probe <stem> --acts <in-context acts npz>`

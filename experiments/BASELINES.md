@@ -110,6 +110,22 @@ Behaviour: AgentHarm `test_public`, vLLM run, official scorer.
 
 Substantially more capable than the 3B (84.6 vs 43.4 non-refusal harm) and slightly more refusing.
 
+**Framing effect on refusal** (`results/10-chat-vs-agentic/`). The same 44 harmful behaviours, asked
+as plain chat and as an agentic task, hf provider, greedy, paired over behaviours via `id_original`:
+
+| framing | refusal |
+|---|---|
+| chat (`chat_dataset=True`, 44, no tools) | 0.7500 |
+| agentic (`chat_dataset=False`, 176, tools) | 0.5909 |
+| **agentic − chat** | **−0.1591**, 95% CI [−0.3125, 0.0000] |
+
+12 behaviours refuse in chat only against 2 agentically only — McNemar exact **p = 0.0129**. Tools
+cut refusal on an unchanged request.
+
+*Refusal axis only.* Harm Score is 0.0000 for every chat sample: AgentHarm's grading functions score
+tool calls, and chat has none, so an agentic grader on a chat transcript returns zero by
+construction. `chat_dataset` is not available on `agentharm_benign()`, so there is no benign chat arm.
+
 **Probe monitor** — AgentHarm `test_public`, 176 harmful + 176 benign, probe trained on val (32+32)
 and read **in-context inside the Inspect scorer**:
 

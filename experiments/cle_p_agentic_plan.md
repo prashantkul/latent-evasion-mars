@@ -1,4 +1,9 @@
-# CLE-P agentic run plan (from 2026-07-25)
+# CLE-P agentic run plan (from 2026-07-25) — SUPERSEDED
+
+> **Superseded 25 Jul 2026 by `agentic_experiment_design.md`.** This was a run schedule, not a
+> design: it listed arms without stating what each would establish or what a null would mean.
+> Stage 1 ran from it cleanly and still could not answer its own question. Kept for the Stage 1
+> provenance and the measured timings; do not plan from it.
 
 Where we go after `results/08-agentic-cle-pilot/`. Each stage says **why** it exists, because the
 expensive mistake available here is spending a `test_public` arm (~4.3 h, ~$13) on a configuration
